@@ -4,6 +4,7 @@ First Alpha! use with care!
 
 
 How it works: 
+run main.py
 Drag images onto the canvas, copy the full canvas (or save) to your clipboard by pressing [Copy}
 Make edits with external tools (like with AI, photoshop, etc)
 use [Paste] to Paste the image back onto the canvas as overlay, move in place (if view remained unmoved it might not be nessecary).
