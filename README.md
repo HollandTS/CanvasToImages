@@ -26,8 +26,18 @@ Tool is currently very buggy but usable
 
 ![CanvasToImagesgif1](https://github.com/user-attachments/assets/44ad7e5f-88ce-4c33-827b-30f7992c1751)
 
+Few updates 4/17/2025:
+'Tolerance' for Transparency color: How much range of this color is gonna be the transparent color?
+'Invert transparency' checkbox
+- Radio-buttons to choose what to copy to clipboard
+- Zooming uses better filter
+- new canvas borders, can be changed too
+- Load palette. Pick an image to limit the colors to. Press X to remove palette.
+![new_update](https://github.com/user-attachments/assets/353be46d-cd08-40a5-86f5-2e7684a05378)
 
+Next up: 
 
+Adding layers, multiple overlays, new settings tabs, much more to come. stay tuned
 
 
 
