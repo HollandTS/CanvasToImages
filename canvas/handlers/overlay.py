@@ -33,7 +33,7 @@ class OverlayHandler:
                 if view.last_capture_origin is not None:
                      initial_x, initial_y = view.last_capture_origin
                      logging.info(f"Overlay Paste: Using last capture origin ({initial_x},{initial_y}) for placement.")
-                     # Clear origin after use for paste
+                     # Clear origin after use for paste so next non-layout paste is at 0,0
                      view.last_capture_origin = None
                 else:
                      initial_x, initial_y = 0, 0 # Default to 0,0 if no capture origin
@@ -44,7 +44,18 @@ class OverlayHandler:
 
                 view.pasted_overlay_item_id = view.canvas.create_image(initial_x, initial_y, anchor="nw", image=view.pasted_overlay_tk_image, tags=("draggable", "pasted_overlay"))
 
-                view.canvas.tag_raise(view.pasted_overlay_item_id)
+                # --- Overlay stacking order ---
+                overlay_behind = False
+                if hasattr(view, 'app') and hasattr(view.app, 'layer_behind_mode'):
+                    overlay_behind = view.app.layer_behind_mode.get()
+                if overlay_behind:
+                    # Lower overlay below all draggable items
+                    view.canvas.tag_lower(view.pasted_overlay_item_id, "draggable")
+                else:
+                    # Raise overlay above all
+                    view.canvas.tag_raise(view.pasted_overlay_item_id)
+                # --- End stacking order ---
+
                 logging.info(f"Overlay Paste: Displayed ID: {view.pasted_overlay_item_id} at ({initial_x},{initial_y}).")
                 messagebox.showinfo("Paste Successful", "Image pasted as overlay.\nDrag to align.")
 

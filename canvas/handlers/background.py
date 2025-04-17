@@ -12,18 +12,34 @@ class BackgroundHandler:
     def __init__(self, canvas_view):
         self.view = canvas_view
 
-    def apply_transparency(self, image, color_tuple):
+    def apply_transparency(self, image, color_tuple, tolerance=None):
         try:
             if not isinstance(color_tuple, tuple) or len(color_tuple) != 3: return image
+            if tolerance is None:
+                # Try to get from app if available
+                if hasattr(self.view, 'app') and hasattr(self.view.app, 'tolerance_value'):
+                    tolerance = self.view.app.tolerance_value.get()
+                else:
+                    tolerance = 0
             img_rgba = image.convert("RGBA"); datas = list(img_rgba.getdata())
-            new_data = []; match_found = False
-            for i, item in enumerate(datas):
-                if item[:3] == color_tuple:
-                    new_data.append((item[0], item[1], item[2], 0))
-                    # if not match_found: logging.debug(f"BG Apply Trans: Match idx {i}, Color: {item[:3]}"); match_found = True
-                else: new_data.append(item)
+            new_data = []
+            invert = False
+            if hasattr(self.view, 'app') and hasattr(self.view.app, 'invert_transparency'):
+                invert = self.view.app.invert_transparency.get()
+            def is_close(c1, c2, tol):
+                return sum((a-b)**2 for a,b in zip(c1, c2)) <= tol*tol
+            for item in datas:
+                if is_close(item[:3], color_tuple, tolerance):
+                    if invert:
+                        new_data.append(item)
+                    else:
+                        new_data.append((item[0], item[1], item[2], 0))
+                else:
+                    if invert:
+                        new_data.append((item[0], item[1], item[2], 0))
+                    else:
+                        new_data.append(item)
             img_rgba.putdata(new_data)
-            # if not match_found: logging.debug(f"BG Apply Trans: No pixels matched {color_tuple}.")
             return img_rgba
         except Exception as e: logging.error(f"BG Apply Trans error: {e}", exc_info=True); return image
 
@@ -37,29 +53,46 @@ class BackgroundHandler:
             logging.info(f"BG Set Color: RGB tuple: {new_bg_color}")
             view.background_color = new_bg_color
 
-            logging.debug("BG Set Color: Updating tile display...")
+            # Always set the canvas background to white (or your preferred neutral color)
+            view.canvas.config(bg='white')
+
+            # --- FULL REDRAW: Remove all draggable items except overlay and re-add ---
+            for item_id in view.canvas.find_withtag("draggable"):
+                tags = view.canvas.gettags(item_id)
+                if "pasted_overlay" not in tags:
+                    view.canvas.delete(item_id)
             new_tk_images = []
-            items_updated = 0
+            logging.info(f"BG Set Color: Redraw debug: images={list(view.images.keys())}")
             for filename, image_info in list(view.images.items()):
-                 item_id = image_info['id']
-                 if not view.canvas.find_withtag(item_id): continue
-                 view.canvas.delete(item_id)
-                 display_image = image_info["image"].copy()
-                 if view.background_color: display_image = self.apply_transparency(display_image, view.background_color)
-                 # Re-apply zoom scaling if zoom exists
-                 if hasattr(view, 'current_scale_factor') and view.current_scale_factor != 1.0:
-                      scaled_w = max(1, int(display_image.width * view.current_scale_factor)); scaled_h = max(1, int(display_image.height * view.current_scale_factor))
-                      display_image = display_image.resize((scaled_w, scaled_h), LANCZOS_RESAMPLE)
-                 tk_image = ImageTk.PhotoImage(display_image); new_tk_images.append(tk_image)
-                 new_item_id = view.canvas.create_image(image_info["x"], image_info["y"], anchor="nw", image=tk_image, tags=("draggable", filename))
-                 view.images[filename]['id'] = new_item_id # Update ID
-                 items_updated += 1
-                 # Re-apply coordinate scaling if zoom exists
-                 if hasattr(view, 'current_scale_factor') and view.current_scale_factor != 1.0:
-                     view.canvas.scale(new_item_id, image_info["x"], image_info["y"], view.current_scale_factor, view.current_scale_factor)
-                 if view.pasted_overlay_item_id and view.canvas.find_withtag(view.pasted_overlay_item_id): view.canvas.tag_lower(new_item_id, view.pasted_overlay_item_id)
+                logging.info(f"BG Set Color: Processing {filename}")
+                if os.path.exists(filename):
+                    logging.info(f"BG Set Color: Reloading {filename} from disk")
+                    original_image = Image.open(filename).convert("RGBA")
+                else:
+                    logging.warning(f"BG Set Color: File not found: {filename}, using in-memory image")
+                    original_image = image_info["image"].copy()
+                display_image = original_image.copy()
+                if view.background_color:
+                    logging.info(f"BG Set Color: Applying transparency for {filename} with color {view.background_color}")
+                    display_image = self.apply_transparency(display_image, view.background_color)
+                else:
+                    logging.info(f"BG Set Color: No background color set for {filename}")
+                # Re-apply zoom scaling if zoom exists
+                if hasattr(view, 'current_scale_factor') and view.current_scale_factor != 1.0:
+                    scaled_w = max(1, int(display_image.width * view.current_scale_factor))
+                    scaled_h = max(1, int(display_image.height * view.current_scale_factor))
+                    display_image = display_image.resize((scaled_w, scaled_h), LANCZOS_RESAMPLE)
+                tk_image = ImageTk.PhotoImage(display_image)
+                new_tk_images.append(tk_image)
+                new_item_id = view.canvas.create_image(image_info["x"], image_info["y"], anchor="nw", image=tk_image, tags=("draggable", filename))
+                view.images[filename]['id'] = new_item_id # Update ID
+                # Re-apply coordinate scaling if zoom exists
+                if hasattr(view, 'current_scale_factor') and view.current_scale_factor != 1.0:
+                    view.canvas.scale(new_item_id, image_info["x"], image_info["y"], view.current_scale_factor, view.current_scale_factor)
+                if view.pasted_overlay_item_id and view.canvas.find_withtag(view.pasted_overlay_item_id):
+                    view.canvas.tag_lower(new_item_id, view.pasted_overlay_item_id)
             view.tk_images = new_tk_images
-            logging.info(f"BG Set Color: Updated display for {items_updated} tiles.")
+            logging.info(f"BG Set Color: Redrawn all images from disk.")
         except ValueError as ve: logging.error(f"BG Set Color: Invalid hex '{color_hex}': {ve}"); messagebox.showerror("Error", f"Invalid color: {color_hex}."); view.background_color = None
         except Exception as e: logging.error(f"BG Set Color Error: {e}", exc_info=True); view.background_color = None
 

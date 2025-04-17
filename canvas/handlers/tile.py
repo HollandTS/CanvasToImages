@@ -27,7 +27,7 @@ class TileHandler:
             view.tk_images.append(tk_image) # Add to list for tiles
 
             image_id = view.canvas.create_image(x, y, anchor="nw", image=tk_image, tags=("draggable", filename))
-            view.images[filename] = {"id": image_id, "image": image, "filename": filename, "x": x, "y": y}
+            view.images[filename] = {"id": image_id, "image": image, "original_image": image.copy(), "filename": filename, "x": x, "y": y}
 
             if view.pasted_overlay_item_id and view.canvas.find_withtag(view.pasted_overlay_item_id):
                  view.canvas.tag_raise(image_id, view.pasted_overlay_item_id) # Place under overlay

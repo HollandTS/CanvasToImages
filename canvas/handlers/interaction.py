@@ -14,7 +14,7 @@ class InteractionHandler:
         self.box_select_data = {"start_x": 0, "start_y": 0, "rect_id": None}
         self.selection_outline_ids = {}
         # Panning State - Store last WINDOW coords for pan delta
-        self.pan_data = {"active": False, "last_x": 0, "last_y": 0}
+        self.pan_data = {"active": False, "last_x": 0, "last_y": 0} # Accumulators removed
 
     # --- Click Handlers ---
     def handle_click(self, event):
@@ -23,16 +23,24 @@ class InteractionHandler:
         view = self.view; view.last_clicked_item_id = None; canvas_x = view.canvas.canvasx(event.x); canvas_y = view.canvas.canvasy(event.y); clicked_item_id = self._find_draggable_item_canvas(canvas_x, canvas_y)
         if view.app.selecting_bg_color:
             if clicked_item_id and "pasted_overlay" not in view.canvas.gettags(clicked_item_id):
-                 if hasattr(view,'bg_handler') and hasattr(view.bg_handler,'handle_pick_click'): view.bg_handler.handle_pick_click(event)
-                 else: logging.error("BG Pick Error: bg_handler missing."); view.app.cancel_select_background_color()
-            else: logging.info("BG Pick click missed tile."); view.app.cancel_select_background_color()
+                 if hasattr(view,'bg_handler'): view.bg_handler.handle_pick_click(event)
+                 else: logging.error("BG Pick Error"); view.app.cancel_select_background_color()
+            else: logging.info("BG Pick missed tile."); view.app.cancel_select_background_color()
             return
         ctrl=(event.state & 0x0004)!=0 or (sys.platform=="darwin" and (event.state & 0x0008)!=0); shift=(event.state & 0x0001)!=0; mod = ctrl or shift
         if clicked_item_id:
             view.last_clicked_item_id = clicked_item_id
-            if not mod and clicked_item_id not in view.selected_item_ids: self.clear_selection_visuals(); view.selected_item_ids.clear(); view.selected_item_ids.add(clicked_item_id); self._add_selection_visual(clicked_item_id)
-            self._prepare_drag(event, clicked_item_id, canvas_x, canvas_y) # Prepare drag based on current selection
-        else:
+            # *** Logic streamlined: If not modifier click AND item not selected -> clear & select ***
+            # *** If modifier click -> handled by specific handler ***
+            # *** If plain click on ALREADY selected item -> do nothing to selection here ***
+            if not mod and clicked_item_id not in view.selected_item_ids:
+                self.clear_selection_visuals(); view.selected_item_ids.clear()
+                view.selected_item_ids.add(clicked_item_id); self._add_selection_visual(clicked_item_id)
+                logging.debug(f"Selected single item {clicked_item_id}")
+
+            # *** Always prepare drag state AFTER selection logic ***
+            self._prepare_drag(event, clicked_item_id, canvas_x, canvas_y)
+        else: # Clicked empty space
             if not mod: self.clear_selection_visuals(); view.selected_item_ids.clear()
             self._reset_drag_state() # Reset item drag state
 
@@ -43,8 +51,9 @@ class InteractionHandler:
             view.last_clicked_item_id = clicked_item_id
             if clicked_item_id in view.selected_item_ids:
                  if len(view.selected_item_ids)>1: view.selected_item_ids.remove(clicked_item_id); self._remove_selection_visual(clicked_item_id)
+                 else: logging.debug("Ctrl-click ignored (last item)") # Don't deselect last item
             else: view.selected_item_ids.add(clicked_item_id); self._add_selection_visual(clicked_item_id)
-            self._reset_drag_state()
+            self._reset_drag_state() # Reset drag (don't start drag on ctrl)
         else: self._reset_drag_state()
 
     def handle_shift_click(self, event): logging.warning("Shift-click range select NYI."); self.handle_ctrl_click(event)
@@ -52,13 +61,15 @@ class InteractionHandler:
     # --- Drag Handlers ---
     def _prepare_drag(self, event, clicked_item_id, click_canvas_x, click_canvas_y):
          view = self.view
-         if clicked_item_id in view.selected_item_ids: # Prep Multi-Drag
+         # *** Prepare multi-drag ONLY if the clicked item is currently selected ***
+         if clicked_item_id in view.selected_item_ids:
              self.multi_drag_data={"active":True, "start_x":click_canvas_x, "start_y":click_canvas_y, "item_start_coords":{}}
-             for item_id in view.selected_item_ids: coords=view.canvas.coords(item_id);
-             if coords: self.multi_drag_data["item_start_coords"][item_id] = coords
+             for item_id in view.selected_item_ids: # Get coords for ALL currently selected
+                 coords=view.canvas.coords(item_id);
+                 if coords: self.multi_drag_data["item_start_coords"][item_id] = coords
              logging.debug(f"Prep multi-drag {len(view.selected_item_ids)}."); self.drag_data["item"] = None
-         else: # Prep Single Drag
-             self.drag_data={"item":clicked_item_id, "canvas_x":click_canvas_x, "canvas_y":click_canvas_y} # Only store canvas coords
+         else: # Prepare single drag (item wasn't selected before the click)
+             self.drag_data={"item":clicked_item_id, "canvas_x":click_canvas_x, "canvas_y":click_canvas_y}
              self.multi_drag_data["active"] = False; logging.debug(f"Prep single drag {clicked_item_id}.")
 
     def handle_drag(self, event):
@@ -68,14 +79,23 @@ class InteractionHandler:
         try:
             current_canvas_x = view.canvas.canvasx(event.x); current_canvas_y = view.canvas.canvasy(event.y)
             if self.multi_drag_data.get("active"):
-                delta_x = current_canvas_x - self.multi_drag_data["start_x"]; delta_y = current_canvas_y - self.multi_drag_data["start_y"]
+                # Multi-drag uses CANVAS delta from start
+                delta_x = current_canvas_x - self.multi_drag_data["start_x"]
+                delta_y = current_canvas_y - self.multi_drag_data["start_y"]
+                # logging.debug(f"Multi-Drag Delta: {delta_x:.1f}, {delta_y:.1f}") # Verbose
                 for item_id, start_coords in self.multi_drag_data["item_start_coords"].items():
-                    if view.canvas.find_withtag(item_id): target_x = start_coords[0] + delta_x; target_y = start_coords[1] + delta_y; view.canvas.coords(item_id, target_x, target_y); self._update_item_stored_coords(item_id, round(target_x), round(target_y))
-                self._update_selection_visual_positions()
+                    if view.canvas.find_withtag(item_id):
+                        target_x = start_coords[0] + delta_x
+                        target_y = start_coords[1] + delta_y
+                        view.canvas.coords(item_id, target_x, target_y) # Set absolute position
+                        self._update_item_stored_coords(item_id, round(target_x), round(target_y)) # Store rounded int
+                self._update_selection_visual_positions() # Move outlines
             elif self.drag_data.get("item"):
+                # Single drag uses CANVAS delta from last pos
                 item_id = self.drag_data["item"]
                 if not view.canvas.find_withtag(item_id): self.drag_data["item"]=None; return
-                delta_x = current_canvas_x - self.drag_data["canvas_x"]; delta_y = current_canvas_y - self.drag_data["canvas_y"]
+                delta_x = current_canvas_x - self.drag_data["canvas_x"]
+                delta_y = current_canvas_y - self.drag_data["canvas_y"]
                 if abs(delta_x) > 0.001 or abs(delta_y) > 0.001: view.canvas.move(item_id, delta_x, delta_y)
                 self.drag_data["canvas_x"] = current_canvas_x; self.drag_data["canvas_y"] = current_canvas_y # Update last canvas pos
                 new_coords = view.canvas.coords(item_id)
@@ -91,19 +111,26 @@ class InteractionHandler:
             if self.multi_drag_data.get("active"): items_affected = list(self.multi_drag_data["item_start_coords"].keys())
             elif self.drag_data.get("item"): items_affected = [self.drag_data["item"]]
             if items_affected:
-                logging.debug(f"Release affecting {len(items_affected)}.")
+                # logging.debug(f"Release affecting {len(items_affected)}.") # Verbose
+                # Clamp Positions FIRST
+                for item_id in items_affected:
+                     if view.canvas.find_withtag(item_id): self._clamp_item_to_bounds(item_id)
+                # Resolve Overlaps SECOND
                 if not view.overlap_enabled.get():
                     all_item_ids=set(view.canvas.find_withtag("draggable"));
                     if view.pasted_overlay_item_id: all_item_ids.add(view.pasted_overlay_item_id)
                     for moved_id in items_affected:
                          if view.canvas.find_withtag(moved_id): self._resolve_overlaps(moved_id, all_item_ids - {moved_id})
+                # Apply Snapping THIRD
                 if view.snap_enabled.get() and view.current_grid_info:
                     for item_id in items_affected:
                         if view.canvas.find_withtag(item_id): self.snap_to_grid(item_id)
+                # Store final coords FOURTH
                 for item_id in items_affected:
                      if view.canvas.find_withtag(item_id):
                          fc = view.canvas.coords(item_id);
                          if fc: fx=int(round(fc[0])); fy=int(round(fc[1])); final_coords_map[item_id]=(fx,fy); self._update_item_stored_coords(item_id,fx,fy)
+                # Update visuals LAST
                 self._update_selection_visual_positions()
             for item_id, pos in final_coords_map.items(): logging.info(f"Final pos Item {item_id}: ({pos[0]},{pos[1]})")
         except Exception as e: logging.error(f"Int Release Error: {e}", exc_info=True)
@@ -111,6 +138,7 @@ class InteractionHandler:
 
     # --- Overlap Resolution ---
     def _resolve_overlaps(self, moved_item_id, other_item_ids):
+        # (Remains the same)
         view = self.view; moved_bbox = view.canvas.bbox(moved_item_id);
         if not moved_bbox: return
         mx1, my1, mx2, my2 = moved_bbox
@@ -121,7 +149,6 @@ class InteractionHandler:
             ox1, oy1, ox2, oy2 = other_bbox
             is_overlapping = not (mx2 <= ox1 or mx1 >= ox2 or my2 <= oy1 or my1 >= oy2)
             if is_overlapping:
-                logging.debug(f"Overlap: {moved_item_id} vs {other_item_id}")
                 push_right=(ox2-mx1)+1; push_left=(ox1-mx2)-1; push_down=(oy2-my1)+1; push_up=(oy1-my2)-1
                 pushes = [];
                 if push_right>0: pushes.append((push_right,0));
@@ -134,8 +161,10 @@ class InteractionHandler:
                 if dist_sq < min_push_dist_sq: min_push_dist_sq=dist_sq; best_push=(dx,dy)
                 push_dx, push_dy = best_push
                 if push_dx != 0 or push_dy != 0:
-                    logging.info(f"Resolving overlap {moved_item_id} push ({push_dx:.0f},{push_dy:.0f})")
+                    logging.info(f"Overlap push {moved_item_id} ({push_dx:.0f},{push_dy:.0f})")
                     view.canvas.move(moved_item_id, push_dx, push_dy)
+                    coords_after_push = view.canvas.coords(moved_item_id)
+                    if coords_after_push: self._update_item_stored_coords(moved_item_id, round(coords_after_push[0]), round(coords_after_push[1]))
                     moved_bbox = view.canvas.bbox(moved_item_id);
                     if not moved_bbox: logging.error("Item vanished!"); return
                     mx1, my1, mx2, my2 = moved_bbox
@@ -219,26 +248,21 @@ class InteractionHandler:
             final_snap_x=int(round(ideal_snap_x)); final_snap_y=int(round(ideal_snap_y))
             delta_x=final_snap_x-int(round(current_x)); delta_y=final_snap_y-int(round(current_y))
             if delta_x != 0 or delta_y != 0:
-                logging.info(f"Snapping Item {item_id} to int pos ({final_snap_x},{final_snap_y})")
+                # logging.info(f"Snapping Item {item_id} to int pos ({final_snap_x},{final_snap_y})") # Can be verbose
                 view.canvas.move(item_id, delta_x, delta_y)
                 self._update_item_stored_coords(item_id, final_snap_x, final_snap_y)
             else:
-                logging.debug(f"Item {item_id} already snapped int pos ({final_snap_x},{final_snap_y}).")
+                # logging.debug(f"Item {item_id} already snapped int pos ({final_snap_x},{final_snap_y}).")
                 self._update_item_stored_coords(item_id, final_snap_x, final_snap_y)
         except Exception as e: logging.error(f"Snap Error item {item_id}, type {grid_type}: {e}", exc_info=True)
 
 
-    # *** Panning Handlers using canvas.scan_dragto for smoother pixel panning ***
+    # *** Panning Handlers (using scan_dragto gain=1) ***
     def handle_pan_start(self, event):
-        """Records starting position for panning if no drag/select is active."""
-        if self.drag_data.get("item") or self.multi_drag_data.get("active") or self.box_select_data.get("rect_id"):
-            logging.debug("Pan Start ignored: Drag/Select active.")
-            return
-        # *** Use scan_mark for panning start ***
+        if self.drag_data.get("item") or self.multi_drag_data.get("active") or self.box_select_data.get("rect_id"): return
         self.view.canvas.scan_mark(event.x, event.y)
         self.pan_data["active"] = True
-        # Store last window coords if needed elsewhere, but not strictly needed for scan_dragto
-        self.pan_data["last_x"] = event.x
+        self.pan_data["last_x"] = event.x # Keep last for reference if needed
         self.pan_data["last_y"] = event.y
         self.view.canvas.config(cursor="fleur")
         logging.debug(f"Pan Start (scan_mark) at window ({event.x},{event.y})")
@@ -246,35 +270,26 @@ class InteractionHandler:
     def handle_pan_motion(self, event):
         """Moves the canvas view based on middle mouse drag using scan_dragto."""
         if self.pan_data.get("active"):
-            # *** Use scan_dragto ***
-            # Gain = 1 means 1:1 pixel movement relative to scan_mark point
-            # Gain < 1 means slower movement (e.g., 0.5 means half speed)
-            # Gain > 1 means faster movement
-            # Since you want very slow, gain=1 (the default if omitted) might still
-            # feel fast if the system sends many events.
-            # Let's use gain=1 for now, assuming the issue was using "units".
+            # scan_dragto handles delta calculation internally based on scan_mark
+            # gain=1.0 means 1:1 pixel movement of canvas content vs mouse movement
             self.view.canvas.scan_dragto(event.x, event.y, gain=1)
-
-            # --- Optional: Redraw grid/visuals during pan ---
-            # Redrawing during scan_dragto can sometimes cause flicker or lag.
-            # Test performance; if laggy, move these to handle_pan_end.
+            # Redraw grid and selection visuals *during* pan for feedback
             self.view.draw_grid()
             self._update_selection_visual_positions()
-            # No need to update last_x/y here, scan_mark is the reference
 
     def handle_pan_end(self, event):
-        """Resets panning state."""
         if self.pan_data.get("active"):
              self.pan_data["active"] = False
              self.view.canvas.config(cursor="")
-             # Final redraw if not done during motion
-             # self.view.draw_grid()
-             # self._update_selection_visual_positions()
+             # Final redraw ensures accuracy after panning stops
+             self.view.draw_grid()
+             self._update_selection_visual_positions()
              logging.debug("Pan End")
     # ****************************
 
+
     # --- Helper Methods ---
-    def _find_draggable_item_canvas(self, canvas_x, canvas_y): # Find based on canvas coords
+    def _find_draggable_item_canvas(self, canvas_x, canvas_y):
         view = self.view; item_ids = view.canvas.find_overlapping(canvas_x-1, canvas_y-1, canvas_x+1, canvas_y+1)
         for item_id in reversed(item_ids):
             if "draggable" in view.canvas.gettags(item_id): return item_id
@@ -285,14 +300,29 @@ class InteractionHandler:
          # DO NOT reset pan_data here
     def _update_item_stored_coords(self, item_id, new_x, new_y):
          view = self.view; int_x = int(round(new_x)); int_y = int(round(new_y))
+         # Clamp coordinates to world bounds before storing
+         max_x = view.canvas_world_width if hasattr(view, 'canvas_world_width') else float('inf')
+         max_y = view.canvas_world_height if hasattr(view, 'canvas_world_height') else float('inf')
+         # Find item dimensions (@ 1.0x scale) for better clamping
+         item_w, item_h = 1, 1 # Default size
+         if item_id == view.pasted_overlay_item_id and view.pasted_overlay_pil_image:
+             item_w, item_h = view.pasted_overlay_pil_image.size
+         else:
+             for fname, data in view.images.items():
+                 if data['id'] == item_id and data['image']:
+                     item_w, item_h = data['image'].size; break
+
+         clamped_x = max(0, min(int_x, max_x - item_w if max_x > item_w else 0))
+         clamped_y = max(0, min(int_y, max_y - item_h if max_y > item_h else 0))
+
          if item_id == view.pasted_overlay_item_id:
-             if view.pasted_overlay_offset != (int_x, int_y): view.pasted_overlay_offset = (int_x, int_y)
+             if view.pasted_overlay_offset != (clamped_x, clamped_y): view.pasted_overlay_offset = (clamped_x, clamped_y)
          else: # Tile
              tags=view.canvas.gettags(item_id);
              if tags and len(tags)>1 and "pasted_overlay" not in tags:
                  fname=tags[1];
                  if fname in view.images and view.images[fname]['id']==item_id:
-                     if view.images[fname]["x"] != int_x or view.images[fname]["y"] != int_y: view.images[fname]["x"]=int_x; view.images[fname]["y"]=int_y;
+                     if view.images[fname]["x"] != clamped_x or view.images[fname]["y"] != clamped_y: view.images[fname]["x"]=clamped_x; view.images[fname]["y"]=clamped_y;
     def _update_single_selection_visual_position(self, item_id):
         if item_id in self.selection_outline_ids:
              view=self.view; outline_id = self.selection_outline_ids[item_id]
@@ -312,3 +342,23 @@ class InteractionHandler:
         for outline_id in list(self.selection_outline_ids.values()):
              if view.canvas.find_withtag(outline_id): view.canvas.delete(outline_id)
         self.selection_outline_ids.clear()
+    def _clamp_item_to_bounds(self, item_id):
+        """Adjusts item position slightly if it's dragged outside world bounds."""
+        view = self.view
+        try:
+            coords = view.canvas.coords(item_id); bbox = view.canvas.bbox(item_id)
+            if not coords or not bbox: return
+            current_x, current_y = coords; item_w = bbox[2] - bbox[0]; item_h = bbox[3] - bbox[1]
+            # Get world bounds at current scale
+            world_w_scaled = view.canvas_world_width * view.current_scale_factor
+            world_h_scaled = view.canvas_world_height * view.current_scale_factor
+            # Max allowed top-left corner
+            max_x = world_w_scaled - item_w; max_y = world_h_scaled - item_h
+            clamped_x = max(0, min(current_x, max_x)); clamped_y = max(0, min(current_y, max_y))
+            dx = clamped_x - current_x; dy = clamped_y - current_y
+            if abs(dx) > 0.1 or abs(dy) > 0.1: # Move if needed
+                # logging.debug(f"Clamping item {item_id} by ({dx:.1f},{dy:.1f}) canvas coords")
+                view.canvas.move(item_id, dx, dy)
+                # Update stored coordinates AFTER clamping
+                self._update_item_stored_coords(item_id, clamped_x, clamped_y)
+        except Exception as e: logging.error(f"Error clamping item {item_id}: {e}", exc_info=True)

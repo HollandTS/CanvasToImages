@@ -12,7 +12,7 @@ def run_apply_canvas_to_images(canvas_view):
         logging.info("Apply Logic: Starting...")
         # *** ADD ZOOM CHECK ***
         if not (hasattr(view, 'current_scale_factor') and abs(view.current_scale_factor - 1.0) < 0.001):
-             messagebox.showwarning("Zoom Error", "Please reset zoom to 100% before applying.")
+             messagebox.showwarning("Zoom Error", "Please reset zoom to 100% before applying.") # Removed hotkey ref
              logging.warning("Apply cancelled: Zoom level is not 100%.")
              return
         # ********************
