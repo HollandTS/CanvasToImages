@@ -38,7 +38,8 @@ Few updates 4/17/2025:
 
 Next up: 
 
-Adding layers, multiple overlays, new settings tabs, much more to come. stay tuned
+Adding layers, multiple overlays, new settings tabs, much more to come. stay tuned,
+'Apply canvas to images'  is currently limited to just a pasted overlay. next update it can be pressed anytime, with any change :). 
 
 
 
