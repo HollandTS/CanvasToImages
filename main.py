@@ -106,6 +106,38 @@ class TerrainToolApp:
             self.load_palette_button.pack(side="left", padx=(0, 2))
             self.clear_palette_button = tk.Button(self.bottom_controls_frame, text="X", command=self.on_clear_palette, width=2, fg="red")
             self.clear_palette_button.pack(side="left", padx=(0, 10))
+
+            # Add alignment buttons
+            align_frame = tk.Frame(self.bottom_controls_frame)
+            align_frame.pack(side="left", padx=(0, 10))
+            
+            # Step size entry
+            tk.Label(align_frame, text="Step:").pack(side="left")
+            self.step_size_var = tk.StringVar(value="2")
+            step_entry = tk.Entry(align_frame, textvariable=self.step_size_var, width=3)
+            step_entry.pack(side="left", padx=(0, 5))
+            
+            # Bind step size change
+            def update_step_size(*args):
+                try:
+                    step = int(self.step_size_var.get())
+                    if step > 0 and hasattr(self.canvas_window, 'alignment_handler'):
+                        self.canvas_window.alignment_handler.set_move_step(step)
+                except ValueError:
+                    self.step_size_var.set("2")  # Reset to default if invalid
+            
+            self.step_size_var.trace_add("write", update_step_size)
+            
+            # Arrow buttons
+            self.align_left_btn = tk.Button(align_frame, text="←", command=self.align_left, width=2)
+            self.align_left_btn.pack(side="left", padx=1)
+            self.align_right_btn = tk.Button(align_frame, text="→", command=self.align_right, width=2)
+            self.align_right_btn.pack(side="left", padx=1)
+            self.align_bottom_btn = tk.Button(align_frame, text="↓", command=self.align_bottom, width=2)
+            self.align_bottom_btn.pack(side="left", padx=1)
+            self.align_top_btn = tk.Button(align_frame, text="↑", command=self.align_top, width=2)
+            self.align_top_btn.pack(side="left", padx=1)
+
             self.refresh_button = tk.Button(self.bottom_controls_frame, text="Refresh Tool", command=self.refresh_tool); self.refresh_button.pack(side="right", padx=5)
             self.load_layout_button = tk.Button(self.bottom_controls_frame, text="Load Layout", command=self.load_canvas_layout); self.load_layout_button.pack(side="right", padx=5)
             self.save_layout_button = tk.Button(self.bottom_controls_frame, text="Save Layout", command=self.save_canvas_layout); self.save_layout_button.pack(side="right", padx=5)
@@ -385,11 +417,14 @@ class TerrainToolApp:
         except Exception as e: logging.error(f"Error in invert toggle: {e}", exc_info=True)
     def on_overlay_behind_toggle(self):
         try:
-            logging.info("Overlay behind images toggled.")
-            if hasattr(self.canvas_window, 'update_overlay_stacking'):
-                self.canvas_window.update_overlay_stacking()
+            if hasattr(self.canvas_window, 'set_layer_behind'):
+                self.canvas_window.set_layer_behind(self.layer_behind_mode.get())
+            else:
+                logging.error("Canvas missing layer behind toggle method!")
+                messagebox.showerror("Error", "Layer toggle fn missing.")
         except Exception as e:
-            logging.error(f"Error in overlay behind toggle: {e}", exc_info=True)
+            logging.error(f"Error in layer behind toggle: {e}", exc_info=True)
+            messagebox.showerror("Error", "Layer toggle failed.")
 
     def open_tolerance_slider(self):
         win = tk.Toplevel(self.root)
@@ -421,6 +456,96 @@ class TerrainToolApp:
         """Enable pick mode for background color selection from canvas."""
         if hasattr(self.canvas_window, 'enable_background_color_pick_mode'):
             self.canvas_window.enable_background_color_pick_mode()
+
+    def _get_grid_snap_points(self):
+        """Get the grid snap points from the canvas window."""
+        try:
+            if not hasattr(self.canvas_window, 'get_grid_snap_points'):
+                return None
+            return self.canvas_window.get_grid_snap_points()
+        except Exception as e:
+            logging.error(f"Error getting grid snap points: {e}", exc_info=True)
+            return None
+
+    def _get_selected_items(self):
+        """Get the currently selected items from the canvas window."""
+        try:
+            if not hasattr(self.canvas_window, 'get_selected_items'):
+                return []
+            return self.canvas_window.get_selected_items()
+        except Exception as e:
+            logging.error(f"Error getting selected items: {e}", exc_info=True)
+            return []
+
+    def _find_nearest_snap_point(self, value, snap_points):
+        """Find the nearest snap point to a given value."""
+        if not snap_points:
+            return value
+        return min(snap_points, key=lambda x: abs(x - value))
+
+    def align_left(self):
+        """Align selected items to the nearest left grid line."""
+        try:
+            if not hasattr(self.canvas_window, 'align_left'):
+                messagebox.showerror("Error", "Alignment function not available")
+                return
+            
+            if not self.canvas_window.align_left():
+                messagebox.showinfo("Align", "No items to align or no grid available")
+                return
+                
+            logging.info("Left alignment completed")
+        except Exception as e:
+            logging.error(f"Error in left alignment: {e}", exc_info=True)
+            messagebox.showerror("Error", "Left alignment failed")
+
+    def align_right(self):
+        """Align selected items' right edges to the nearest grid line."""
+        try:
+            if not hasattr(self.canvas_window, 'align_right'):
+                messagebox.showerror("Error", "Alignment function not available")
+                return
+            
+            if not self.canvas_window.align_right():
+                messagebox.showinfo("Align", "No items to align or no grid available")
+                return
+                
+            logging.info("Right alignment completed")
+        except Exception as e:
+            logging.error(f"Error in right alignment: {e}", exc_info=True)
+            messagebox.showerror("Error", "Right alignment failed")
+
+    def align_top(self):
+        """Align selected items to the nearest top grid line."""
+        try:
+            if not hasattr(self.canvas_window, 'align_top'):
+                messagebox.showerror("Error", "Alignment function not available")
+                return
+            
+            if not self.canvas_window.align_top():
+                messagebox.showinfo("Align", "No items to align or no grid available")
+                return
+                
+            logging.info("Top alignment completed")
+        except Exception as e:
+            logging.error(f"Error in top alignment: {e}", exc_info=True)
+            messagebox.showerror("Error", "Top alignment failed")
+
+    def align_bottom(self):
+        """Align selected items' bottom edges to the nearest grid line."""
+        try:
+            if not hasattr(self.canvas_window, 'align_bottom'):
+                messagebox.showerror("Error", "Alignment function not available")
+                return
+            
+            if not self.canvas_window.align_bottom():
+                messagebox.showinfo("Align", "No items to align or no grid available")
+                return
+                
+            logging.info("Bottom alignment completed")
+        except Exception as e:
+            logging.error(f"Error in bottom alignment: {e}", exc_info=True)
+            messagebox.showerror("Error", "Bottom alignment failed")
 
 if __name__ == "__main__":
     logging.info("="*20 + " Starting CanvasToImages " + "="*20)

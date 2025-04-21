@@ -12,6 +12,7 @@ from .handlers.background import BackgroundHandler
 from .handlers.interaction import InteractionHandler
 from .handlers.overlay import OverlayHandler
 from .handlers.tile import TileHandler
+from .handlers.alignment import AlignmentHandler
 from .apply import run_apply_canvas_to_images
 from .utils import is_above_canvas
 
@@ -38,7 +39,11 @@ class CanvasWindow(tk.Frame):
             self.images = {}; self.tk_images = []; self.background_color = None; self.transparency_color = None; self.pasted_overlay_pil_image = None; self.pasted_overlay_tk_image = None; self.pasted_overlay_item_id = None; self.pasted_overlay_offset = (0, 0); self.current_grid_info = None; self.last_clicked_item_id = None; self.selected_item_ids = set(); self.current_scale_factor = 1.0; self.zoom_label = None; self.zoom_label_after_id = None
             self.last_capture_origin = None
             # Handlers
-            self.bg_handler = BackgroundHandler(self); self.tile_handler = TileHandler(self); self.overlay_handler = OverlayHandler(self); self.interaction_handler = InteractionHandler(self)
+            self.bg_handler = BackgroundHandler(self)
+            self.tile_handler = TileHandler(self)
+            self.overlay_handler = OverlayHandler(self)
+            self.interaction_handler = InteractionHandler(self)
+            self.alignment_handler = AlignmentHandler(self)
             # Bindings
             self.canvas.bind("<Button-1>", self.interaction_handler.handle_click); self.canvas.bind("<Control-Button-1>", self.interaction_handler.handle_ctrl_click); self.canvas.bind("<Shift-Button-1>", self.interaction_handler.handle_shift_click); self.canvas.bind("<B1-Motion>", self.interaction_handler.handle_drag); self.canvas.bind("<ButtonRelease-1>", self.interaction_handler.handle_release)
             self.canvas.bind("<ButtonPress-3>", self.interaction_handler.start_box_select); self.canvas.bind("<B3-Motion>", self.interaction_handler.update_box_select); self.canvas.bind("<ButtonRelease-3>", self.interaction_handler.end_box_select)
@@ -543,3 +548,138 @@ class CanvasWindow(tk.Frame):
             self.canvas.unbind('<Button-1>', self._bg_pick_bind_id)
             del self._bg_pick_bind_id
         self.canvas.config(cursor='')
+
+    def get_grid_snap_points(self):
+        """Get the grid snap points for alignment."""
+        try:
+            if not hasattr(self, 'current_grid_info') or not self.current_grid_info:
+                return None
+
+            grid_type = self.current_grid_info.get('type')
+            
+            if grid_type == "pixel":
+                step = self.current_grid_info.get('step')
+                if not step or step <= 0:
+                    return None
+                
+                # Calculate x points
+                x_points = []
+                current_x = 0
+                while current_x <= self.canvas_world_width:
+                    x_points.append(current_x)
+                    current_x += step
+
+                # Calculate y points
+                y_points = []
+                current_y = 0
+                while current_y <= self.canvas_world_height:
+                    y_points.append(current_y)
+                    current_y += step
+
+                return {
+                    'x_points': x_points,
+                    'y_points': y_points
+                }
+                
+            elif grid_type == "diamond":
+                cell_w = self.current_grid_info.get('cell_width')
+                cell_h = self.current_grid_info.get('cell_height')
+                if not cell_w or cell_w <= 0 or not cell_h or cell_h <= 0:
+                    return None
+                    
+                # For diamond grid, we'll use the cell width and height
+                # Calculate x points
+                x_points = []
+                current_x = 0
+                while current_x <= self.canvas_world_width:
+                    x_points.append(current_x)
+                    current_x += cell_w
+
+                # Calculate y points
+                y_points = []
+                current_y = 0
+                while current_y <= self.canvas_world_height:
+                    y_points.append(current_y)
+                    current_y += cell_h
+
+                return {
+                    'x_points': x_points,
+                    'y_points': y_points
+                }
+            
+            return None
+            
+        except Exception as e:
+            logging.error(f"Error getting grid snap points: {e}", exc_info=True)
+            return None
+
+    def get_selected_items(self):
+        """Get the currently selected items with their positions and sizes."""
+        try:
+            selected_items = []
+            
+            # Create a wrapper class for each item to provide consistent interface
+            class ItemWrapper:
+                def __init__(self, canvas_window, x, y, width, height, item_id):
+                    self._canvas_window = canvas_window
+                    self._x = x
+                    self._y = y
+                    self._width = width
+                    self._height = height
+                    self._item_id = item_id
+
+                def get_position(self):
+                    return self._x, self._y
+
+                def set_position(self, x, y):
+                    self._x = x
+                    self._y = y
+                    # Update the actual item position on canvas
+                    for filename, data in self._canvas_window.images.items():
+                        if data['id'] == self._item_id:
+                            data['x'] = x
+                            data['y'] = y
+                            self._canvas_window.canvas.coords(self._item_id, x, y)
+                            break
+
+                def get_size(self):
+                    return self._width, self._height
+
+            # Get items from selection or last clicked
+            item_ids = self.selected_item_ids.copy() if self.selected_item_ids else set()
+            if not item_ids and self.last_clicked_item_id:
+                item_ids.add(self.last_clicked_item_id)
+
+            # Create wrapper for each item
+            for item_id in item_ids:
+                for filename, data in self.images.items():
+                    if data['id'] == item_id:
+                        x, y = data['x'], data['y']
+                        width, height = data['image'].size
+                        selected_items.append(ItemWrapper(self, x, y, width, height, item_id))
+                        break
+
+            return selected_items
+        except Exception as e:
+            logging.error(f"Error getting selected items: {e}", exc_info=True)
+            return []
+
+    def refresh_canvas(self):
+        """Refresh the canvas display."""
+        self.canvas.update_idletasks()
+
+    def align_left(self):
+        """Align selected items to nearest left grid line."""
+        return self.alignment_handler.align_left()
+
+    def align_right(self):
+        """Align selected items' right edges to nearest grid line."""
+        return self.alignment_handler.align_right()
+
+    def align_top(self):
+        """Align selected items to nearest top grid line."""
+        return self.alignment_handler.align_top()
+
+    def align_bottom(self):
+        """Align selected items' bottom edges to nearest grid line."""
+        return self.alignment_handler.align_bottom()
