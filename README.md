@@ -23,11 +23,11 @@ Use 'Tolerance' if this color has a bigger range
 Enable 'Invert' to invert transparency.
 
 - Background:
-Currently you can only just pick a color
+Currently you can only just pick a color to be canvas background, might implement image bground later
 
 - Capture/Paste:
 [Save] to save the canvas as png, [Copy] to copy canvas image on clipboard.
-Choose what to copy/save: View (the current view of canvas), Images only, or Full canvas
+Choose what to copy/save: View (the current view of canvas), Images only (topleft px to bottomright px), or Full canvas
 
 - Layer:
 [Del] to remove selected image(s). Hotkey: X or Delete
@@ -36,7 +36,7 @@ Choose what to copy/save: View (the current view of canvas), Images only, or Ful
 Arrows to move selected image(s) by pixel steps. Hotkeys: Arrows
 
 - Overlay:
-Set the pasted overlay's Opacity, put overlay to Front or Back
+Set the pasted overlay's Opacity, put overlay to Front or Back of layers/images
 
 ### Canvas Controls:
 
@@ -53,15 +53,15 @@ Note: With snap enabled, you can loose the manual alignments (Arrow buttons). Ma
 
 ### Bottom Controls:
 
-- Grid (Optional): currently i only have a 2D test grid 2 pxls, and TS and RA2 (c&c games) presets! Clone a gridfile and use same name for your own grid. e.g.: 'iso 48w 24h' is for the game Tiberian Sun, '2d 4px' is just for flat 2d, 4 pixels wide.
+- Grid (Optional): currently i only have a 2D test grid 2 pxls, and TS and RA2 (c&c games) presets! Clone a gridfile and use same name structure to create own grid. e.g.: 'iso 48w 24h' is for the game Tiberian Sun, '2d 4px' is just for flat 2d, 4 pixels wide.
 - Canvas: Controls to set the size of the canvas if needed
 - Palette: Load an image to set the colors closest to the image you loaded.
-- Layout: Save and load your current canvas
+- Layout: Save and load all image placements on the canvas
 - Show/hide Layers: shows/hides the layer panel: Here you see the image title's, drag them to change layer order. Arrow Buttons currently don't work
 
 - Apply Canvas to Images: The magical button! Make sure to backup your images before using this button!
 
 ### File manager:
 Simply press Load images to load images
-use Ctrl and shift to select multiple images to delete. Currently can only drag 1 image at the time
+use Ctrl and shift to select multiple images to delete. Currently can only drag 1 image on the canvas at the time
 
