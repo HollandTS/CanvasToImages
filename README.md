@@ -58,5 +58,7 @@ Note: With snap enabled, you can loose the manual alignments (Arrow buttons). Ma
 
 - Apply Canvas to Images: The magical button! Make sure to backup your images before using this button!
 
-
+### File manager:
+Simply press Load images to load images
+use Ctrl and shift to select multiple images to delete. Currently can only drag 1 image at the time
 
