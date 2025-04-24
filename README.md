@@ -12,6 +12,9 @@ use [Paste] to Paste the image back onto the canvas as overlay, move in place (i
 Warning: Upon pressing 'Apply Canvas to Images': ALL IMAGES WILL BE SAVED IMMEDIATLY SO MAKE BACKUP OF IMAGES FIRST!
 Press 'Apply Canvas to Images' to save all the individual images with the pasted overlay.
 
+![cliff_preview](https://github.com/user-attachments/assets/759b57b4-795d-4287-b470-825eec7fdd28)
+Just noticed the first image doesnt get the transparency color put back properly, will fix in next release!
+
 ### Top Controls:
 
 - Transparency:
