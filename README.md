@@ -4,6 +4,7 @@ First Alpha! Make backup of your images first. Use with care!
 
 ## Download EXE here:
 https://github.com/HollandTS/CanvasToImages/releases/download/V1.01/CanvasToImages_v1.01.zip
+Or check Releases -->>
 
 ### How it works: 
 Drag images onto the canvas, select transparency color (optional), copy the canvas (or save) to your clipboard by pressing the Copy Button. 
