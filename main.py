@@ -11,6 +11,7 @@ import platform
 from grid_window import GridWindow
 from canvas.view import CanvasWindow
 import glob
+from canvas.layers_window import LayersWindow
 
 logging.basicConfig(filename='debug.log', level=logging.DEBUG, format='%(asctime)s %(levelname)-8s %(message)s')
 
@@ -33,8 +34,10 @@ class TerrainToolApp:
             self.layer_behind_mode = tk.BooleanVar(value=False)
             self.invert_transparency = tk.BooleanVar(value=False)
             self.tolerance_value = tk.IntVar(value=0)
+            self.move_step_var = tk.StringVar(value="2")  # Default move step size
             self.current_palette = None
             self.palette_colors = None
+            self.layers_window = None  # Will be initialized after canvas_window
             self.setup_ui()
             self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
             self.root.bind("<KeyPress-z>", self.trigger_reset_zoom); self.root.bind("<KeyPress-Z>", self.trigger_reset_zoom)
@@ -51,104 +54,262 @@ class TerrainToolApp:
     def setup_ui(self):
         try:
             logging.info("Setting up UI")
-            self.main_frame = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL); self.main_frame.pack(fill="both", expand=True)
+            self.main_frame = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
+            self.main_frame.pack(fill="both", expand=True)
+            
             # Left Panel
-            self.file_manager_frame = ttk.Frame(self.main_frame); self.main_frame.add(self.file_manager_frame, weight=1)
-            self.grid_window = GridWindow(self.file_manager_frame, self.load_config(), self); self.grid_window.pack(fill="both", expand=True)
+            self.file_manager_frame = ttk.Frame(self.main_frame)
+            self.main_frame.add(self.file_manager_frame, weight=1)
+            self.grid_window = GridWindow(self.file_manager_frame, self.load_config(), self)
+            self.grid_window.pack(fill="both", expand=True)
+            
             # Right Panel
-            self.canvas_frame = ttk.Frame(self.main_frame); self.main_frame.add(self.canvas_frame, weight=3)
-            # Top Controls Frame
-            self.canvas_controls_frame = tk.Frame(self.canvas_frame, height=65)
-            # Row 1
-            row1_frame = tk.Frame(self.canvas_controls_frame)
-            self.transparency_color_button = tk.Button(row1_frame, text="Transparency Color", command=self.start_select_transparency_color); self.transparency_color_button.pack(side="left", padx=5, pady=2)
-            self.tolerance_button = tk.Button(row1_frame, text="Tolerance", command=self.open_tolerance_slider); self.tolerance_button.pack(side="left", padx=2, pady=2)
+            self.canvas_frame = ttk.Frame(self.main_frame)
+            self.main_frame.add(self.canvas_frame, weight=3)
+            
+            # Top Controls Frame - Now using pack for responsive layout
+            self.canvas_controls_frame = tk.Frame(self.canvas_frame)
+            self.canvas_controls_frame.pack(side="top", fill="x", padx=5, pady=5)
+            
+            # Create a frame for groups that will wrap its contents
+            groups_frame = tk.Frame(self.canvas_controls_frame)
+            groups_frame.pack(side="top", fill="x")
+            
+            # Transparency Frame
+            transparency_frame = tk.LabelFrame(groups_frame, text="Transparency", padx=5, pady=2)
+            transparency_frame.pack(side="left", padx=2, pady=2, fill="x")
+            
+            self.transparency_color_button = tk.Button(transparency_frame, text="Pick Color", command=self.start_select_transparency_color)
+            self.transparency_color_button.pack(side="left", padx=2)
+            
+            self.tolerance_button = tk.Button(transparency_frame, text="Tolerance", command=self.open_tolerance_slider)
+            self.tolerance_button.pack(side="left", padx=2)
+            
             self.color_button = self.transparency_color_button  # for compatibility
-            self.color_preview = tk.Label(row1_frame, text=" ", bg="black", width=2); self.color_preview.pack(side="left", padx=5, pady=2)
-            self.color_entry = tk.Entry(row1_frame, width=8); self.color_entry.insert(0, "#000000"); self.color_entry.bind("<Return>", self.update_transparency_color); self.color_entry.pack(side="left", padx=5, pady=2)
-            self.invert_transparency_check = tk.Checkbutton(row1_frame, text="Invert transparency", variable=self.invert_transparency, command=self.on_invert_toggle); self.invert_transparency_check.pack(side="left", padx=5, pady=2)
-            self.save_button = tk.Button(row1_frame, text="Save", command=self.save_image); self.save_button.pack(side="left", padx=5, pady=2)
-            self.copy_button = tk.Button(row1_frame, text="Copy", command=self.copy_canvas); self.copy_button.pack(side="left", padx=5, pady=2)
-            # Capture Mode Radio Buttons
-            tk.Label(row1_frame, text="Capture:").pack(side="left", padx=(10, 2), pady=2)
-            ttk.Radiobutton(row1_frame, text="View", variable=self.capture_mode_var, value="View").pack(side="left")
-            ttk.Radiobutton(row1_frame, text="Images Only", variable=self.capture_mode_var, value="Images Only").pack(side="left")
-            ttk.Radiobutton(row1_frame, text="Full Canvas", variable=self.capture_mode_var, value="Full Canvas").pack(side="left")
-            self.layer_behind_check = tk.Checkbutton(row1_frame, text="Overlay behind images", variable=self.layer_behind_mode, command=self.on_overlay_behind_toggle); self.layer_behind_check.pack(side="left")
-            row1_frame.pack(fill="x", side="top")
-            # Row 2
-            row2_frame = tk.Frame(self.canvas_controls_frame)
-            self.paste_button = tk.Button(row2_frame, text="Paste Image", command=self.paste_image); self.paste_button.pack(side="left", padx=5, pady=2)
-            self.delete_canvas_item_button = tk.Button(row2_frame, text="Del", command=self.delete_canvas_item); self.delete_canvas_item_button.pack(side="left", padx=5, pady=2)
-            # --- Add Background Color Button ---
-            self.bg_color_button = tk.Button(row2_frame, text="Background Color", command=self.open_background_color_picker)
-            self.bg_color_button.pack(side="left", padx=5, pady=2)
-            # --- Add Background Color Pick Button ---
-            self.bg_color_pick_button = tk.Button(row2_frame, text="Pick", command=self.start_pick_background_color)
-            self.bg_color_pick_button.pack(side="left", padx=2, pady=2)
-            # Canvas Size Controls (to the right)
-            self.update_size_button = tk.Button(row2_frame, text="Update Size", command=self.update_canvas_size); self.update_size_button.pack(side="right", padx=5, pady=2)
-            self.height_entry = tk.Entry(row2_frame, textvariable=self.canvas_height_var, width=6); self.height_entry.pack(side="right", padx=(0, 10), pady=2)
-            tk.Label(row2_frame, text="H:").pack(side="right", pady=2)
-            self.width_entry = tk.Entry(row2_frame, textvariable=self.canvas_width_var, width=6); self.width_entry.pack(side="right", padx=(0, 5), pady=2)
-            tk.Label(row2_frame, text="W:").pack(side="right", pady=2)
-            tk.Label(row2_frame, text="Canvas Size:").pack(side="right", padx=(10, 2), pady=2)
-            row2_frame.pack(fill="x", side="top")
-            self.canvas_controls_frame.pack(fill="x", side="top")
-            # --- Add visual separators for control grouping ---
-            ttk.Separator(self.canvas_controls_frame, orient='horizontal').pack(fill='x', pady=3)
-            # Bottom Controls
-            self.bottom_controls_frame = tk.Frame(self.canvas_frame); self.bottom_controls_frame.pack(fill="x", side="bottom", pady=5)
-            self.grid_label = tk.Label(self.bottom_controls_frame, text="Grid:"); self.grid_label.pack(side="left", padx=(10, 2))
-            self.grid_combobox = ttk.Combobox(self.bottom_controls_frame, textvariable=self.selected_grid, state="readonly", width=15); self.grid_combobox.pack(side="left", padx=(0, 10)); self.grid_combobox.bind("<<ComboboxSelected>>", self.on_grid_selected); self.load_grid_options()
-            # --- Add Load Palette Button ---
-            self.load_palette_button = tk.Button(self.bottom_controls_frame, text="Load Palette", command=self.on_load_palette)
-            self.load_palette_button.pack(side="left", padx=(0, 2))
-            self.clear_palette_button = tk.Button(self.bottom_controls_frame, text="X", command=self.on_clear_palette, width=2, fg="red")
-            self.clear_palette_button.pack(side="left", padx=(0, 10))
+            self.color_preview = tk.Label(transparency_frame, text=" ", bg="black", width=2)
+            self.color_preview.pack(side="left", padx=2)
+            
+            self.color_entry = tk.Entry(transparency_frame, width=8)
+            self.color_entry.insert(0, "#000000")
+            self.color_entry.bind("<Return>", self.update_transparency_color)
+            self.color_entry.pack(side="left", padx=2)
+            
+            self.invert_transparency_check = tk.Checkbutton(transparency_frame, text="Invert", 
+                                                          variable=self.invert_transparency, 
+                                                          command=self.on_invert_toggle)
+            self.invert_transparency_check.pack(side="left", padx=2)
+            
+            # Background Frame
+            bg_frame = tk.LabelFrame(groups_frame, text="Background", padx=5, pady=2)
+            bg_frame.pack(side="left", padx=2, pady=2, fill="x")
+            
+            self.bg_color_button = tk.Button(bg_frame, text="Color", command=self.open_background_color_picker)
+            self.bg_color_button.pack(side="left", padx=2)
+            
+            # Capture/Paste Frame
+            capture_frame = tk.LabelFrame(groups_frame, text="Capture/Paste", padx=5, pady=2)
+            capture_frame.pack(side="left", padx=2, pady=2, fill="x")
+            
+            self.save_button = tk.Button(capture_frame, text="Save", command=self.save_image)
+            self.save_button.pack(side="left", padx=2)
+            
+            self.copy_button = tk.Button(capture_frame, text="Copy", command=self.copy_canvas)
+            self.copy_button.pack(side="left", padx=2)
+            
+            self.paste_button = tk.Button(capture_frame, text="Paste", command=self.paste_image)
+            self.paste_button.pack(side="left", padx=2)
+            
+            # Radio buttons for capture mode
+            modes_frame = tk.Frame(capture_frame)
+            modes_frame.pack(side="left", padx=2)
+            
+            tk.Radiobutton(modes_frame, text="View", variable=self.capture_mode_var, value="View").pack(side="left")
+            tk.Radiobutton(modes_frame, text="Images Only", variable=self.capture_mode_var, value="Images Only").pack(side="left")
+            tk.Radiobutton(modes_frame, text="Full Canvas", variable=self.capture_mode_var, value="Full Canvas").pack(side="left")
 
-            # Add alignment buttons
-            align_frame = tk.Frame(self.bottom_controls_frame)
-            align_frame.pack(side="left", padx=(0, 10))
+            # Second row of groups
+            groups_frame2 = tk.Frame(self.canvas_controls_frame)
+            groups_frame2.pack(side="top", fill="x", pady=2)
             
-            # Step size entry
-            tk.Label(align_frame, text="Step:").pack(side="left")
-            self.step_size_var = tk.StringVar(value="2")
-            step_entry = tk.Entry(align_frame, textvariable=self.step_size_var, width=3)
-            step_entry.pack(side="left", padx=(0, 5))
+            # Layer Frame
+            layer_frame = tk.LabelFrame(groups_frame2, text="Layer", padx=5, pady=2)
+            layer_frame.pack(side="left", padx=2, pady=2, fill="x")
             
-            # Bind step size change
-            def update_step_size(*args):
+            self.del_button = tk.Button(layer_frame, text="Del", command=self.delete_canvas_item)
+            self.del_button.pack(side="left", padx=2)
+
+            # Alignment Frame
+            align_frame = tk.LabelFrame(groups_frame2, text="Align", padx=5, pady=2)
+            align_frame.pack(side="left", padx=2, pady=2, fill="x")
+            
+            self.align_left_button = tk.Button(align_frame, text="←", command=self.align_left)
+            self.align_left_button.pack(side="left", padx=2)
+            
+            self.align_right_button = tk.Button(align_frame, text="→", command=self.align_right)
+            self.align_right_button.pack(side="left", padx=2)
+            
+            self.align_top_button = tk.Button(align_frame, text="↑", command=self.align_top)
+            self.align_top_button.pack(side="left", padx=2)
+            
+            self.align_bottom_button = tk.Button(align_frame, text="↓", command=self.align_bottom)
+            self.align_bottom_button.pack(side="left", padx=2)
+
+            # Move step input
+            move_step_frame = tk.Frame(align_frame)
+            move_step_frame.pack(side=tk.TOP, padx=2, pady=2)
+            tk.Label(move_step_frame, text="Move step:").pack(side=tk.LEFT, padx=2)
+            move_step_entry = tk.Entry(move_step_frame, textvariable=self.move_step_var, width=4)
+            move_step_entry.pack(side=tk.LEFT, padx=2)
+
+            # Overlay Frame
+            overlay_frame = tk.LabelFrame(groups_frame2, text="Overlay", padx=5, pady=2)
+            overlay_frame.pack(side="left", padx=2, pady=2, fill="x")
+            
+            # Create opacity control with label
+            opacity_frame = tk.Frame(overlay_frame)
+            opacity_frame.pack(side="left", fill="x", padx=5, pady=2)
+            
+            ttk.Label(opacity_frame, text="Opacity:").pack(side="left")
+            
+            self.overlay_opacity_var = tk.IntVar(value=100)
+            self.overlay_opacity_slider = ttk.Scale(opacity_frame, from_=0, to=100, orient="horizontal", 
+                                                  variable=self.overlay_opacity_var)
+            self.overlay_opacity_slider.pack(side="left", fill="x", expand=True, padx=5)
+            
+            # Create Front/Back radio buttons
+            position_frame = tk.Frame(overlay_frame)
+            position_frame.pack(side="left", fill="x", padx=5, pady=2)
+            
+            self.overlay_position_var = tk.StringVar(value="front")
+            ttk.Radiobutton(position_frame, text="Front", variable=self.overlay_position_var, 
+                           value="front").pack(side="left", padx=5)
+            ttk.Radiobutton(position_frame, text="Back", variable=self.overlay_position_var, 
+                           value="back").pack(side="left", padx=5)
+
+            # Add handlers for overlay controls
+            def on_opacity_change(*args):
                 try:
-                    step = int(self.step_size_var.get())
-                    if step > 0 and hasattr(self.canvas_window, 'alignment_handler'):
-                        self.canvas_window.alignment_handler.set_move_step(step)
-                except ValueError:
-                    self.step_size_var.set("2")  # Reset to default if invalid
-            
-            self.step_size_var.trace_add("write", update_step_size)
-            
-            # Arrow buttons
-            self.align_left_btn = tk.Button(align_frame, text="←", command=self.align_left, width=2)
-            self.align_left_btn.pack(side="left", padx=1)
-            self.align_right_btn = tk.Button(align_frame, text="→", command=self.align_right, width=2)
-            self.align_right_btn.pack(side="left", padx=1)
-            self.align_bottom_btn = tk.Button(align_frame, text="↓", command=self.align_bottom, width=2)
-            self.align_bottom_btn.pack(side="left", padx=1)
-            self.align_top_btn = tk.Button(align_frame, text="↑", command=self.align_top, width=2)
-            self.align_top_btn.pack(side="left", padx=1)
+                    if not self.canvas_window.pasted_overlay_pil_image:
+                        return
+                    opacity = self.overlay_opacity_var.get() / 100.0
+                    self.canvas_window.set_overlay_opacity(opacity)
+                except Exception as e:
+                    logging.error(f"Error changing overlay opacity: {e}", exc_info=True)
 
-            self.refresh_button = tk.Button(self.bottom_controls_frame, text="Refresh Tool", command=self.refresh_tool); self.refresh_button.pack(side="right", padx=5)
-            self.load_layout_button = tk.Button(self.bottom_controls_frame, text="Load Layout", command=self.load_canvas_layout); self.load_layout_button.pack(side="right", padx=5)
-            self.save_layout_button = tk.Button(self.bottom_controls_frame, text="Save Layout", command=self.save_canvas_layout); self.save_layout_button.pack(side="right", padx=5)
-            self.apply_button = tk.Button(self.bottom_controls_frame, text="Apply Canvas to Images", command=self.apply_canvas_to_images); self.apply_button.pack(side="right", padx=5)
-            # Canvas Window
-            try: init_w = int(self.canvas_width_var.get()); init_h = int(self.canvas_height_var.get())
-            except ValueError: init_w = 1500; init_h = 1500; self.canvas_width_var.set("1500"); self.canvas_height_var.set("1500")
+            def on_position_change(*args):
+                try:
+                    self.canvas_window.layer_behind = (self.overlay_position_var.get() == "back")
+                    self.canvas_window.redraw_canvas()
+                except Exception as e:
+                    logging.error(f"Error changing overlay position: {e}", exc_info=True)
+
+            def update_overlay_controls(*args):
+                try:
+                    has_overlay = bool(self.canvas_window.pasted_overlay_pil_image)
+                    state = "normal" if has_overlay else "disabled"
+                    
+                    self.overlay_opacity_slider.configure(state=state)
+                    for child in opacity_frame.winfo_children():
+                        if isinstance(child, ttk.Label):
+                            child.configure(state=state)
+                    
+                    for child in position_frame.winfo_children():
+                        if isinstance(child, ttk.Radiobutton):
+                            child.configure(state=state)
+                    
+                    if has_overlay:
+                        self.overlay_position_var.set("back" if self.canvas_window.layer_behind else "front")
+                except Exception as e:
+                    logging.error(f"Error updating overlay controls: {e}", exc_info=True)
+
+            self.overlay_opacity_slider.configure(command=on_opacity_change)
+            self.overlay_position_var.trace_add("write", on_position_change)
+            self.update_overlay_controls = update_overlay_controls
+
+            # Canvas Window (moved up)
+            try:
+                init_w = int(self.canvas_width_var.get())
+                init_h = int(self.canvas_height_var.get())
+            except ValueError:
+                init_w = 1500
+                init_h = 1500
+                self.canvas_width_var.set("1500")
+                self.canvas_height_var.set("1500")
+                
             self.canvas_window = CanvasWindow(self.canvas_frame, self.grid_window, self, initial_width=init_w, initial_height=init_h)
             self.canvas_window.pack(side="top", fill="both", expand=True)
-            if not self.grid_combobox['values']: self.grid_combobox['values'] = ["None"]; self.selected_grid.set("None")
-        except Exception as e: logging.error(f"Error setting up UI: {e}", exc_info=True)
+
+            # Bottom Controls Frame
+            bottom_controls = tk.Frame(self.canvas_frame)
+            bottom_controls.pack(side="bottom", fill="x", padx=5, pady=5)
+
+            # Grid Frame
+            grid_frame = tk.LabelFrame(bottom_controls, text="Grid", padx=5, pady=2)
+            grid_frame.pack(side="left", padx=2, pady=2, fill="x")
+            
+            tk.Label(grid_frame, text="Type:").pack(side="left", padx=5)
+            self.grid_combobox = ttk.Combobox(grid_frame, textvariable=self.selected_grid, state="readonly", width=15)
+            self.grid_combobox.pack(side="left", padx=5)
+            self.grid_combobox.bind('<<ComboboxSelected>>', lambda e: self.on_grid_selected())
+
+            # Canvas Settings Frame
+            canvas_frame = tk.LabelFrame(bottom_controls, text="Canvas", padx=5, pady=2)
+            canvas_frame.pack(side="left", padx=2, pady=2, fill="x")
+            
+            tk.Label(canvas_frame, text="W:").pack(side="left")
+            self.canvas_width_entry = tk.Entry(canvas_frame, textvariable=self.canvas_width_var, width=5)
+            self.canvas_width_entry.pack(side="left", padx=2)
+            
+            tk.Label(canvas_frame, text="H:").pack(side="left")
+            self.canvas_height_entry = tk.Entry(canvas_frame, textvariable=self.canvas_height_var, width=5)
+            self.canvas_height_entry.pack(side="left", padx=2)
+            
+            self.update_size_button = tk.Button(canvas_frame, text="Update", command=self.update_canvas_size)
+            self.update_size_button.pack(side="left", padx=2)
+
+            # Palette Frame
+            palette_frame = tk.LabelFrame(bottom_controls, text="Palette", padx=5, pady=2)
+            palette_frame.pack(side="left", padx=2, pady=2, fill="x")
+            
+            self.load_palette_button = tk.Button(palette_frame, text="Load", command=self.on_load_palette)
+            self.load_palette_button.pack(side="left", padx=2)
+            
+            self.clear_palette_button = tk.Button(palette_frame, text="X", command=self.on_clear_palette)
+            self.clear_palette_button.pack(side="left", padx=2)
+
+            # Layout Frame
+            layout_frame = tk.LabelFrame(bottom_controls, text="Layout", padx=5, pady=2)
+            layout_frame.pack(side="left", padx=2, pady=2, fill="x")
+            
+            self.load_layout_button = tk.Button(layout_frame, text="Load", command=self.load_canvas_layout)
+            self.load_layout_button.pack(side="left", padx=2)
+            
+            self.save_layout_button = tk.Button(layout_frame, text="Save", command=self.save_canvas_layout)
+            self.save_layout_button.pack(side="left", padx=2)
+
+            # Apply Button Frame
+            apply_frame = tk.Frame(bottom_controls)
+            apply_frame.pack(side="right", padx=2, pady=2)
+            
+            # Add Layers Toggle Button
+            self.layers_toggle_button = tk.Button(apply_frame, text="Show Layers", command=self.toggle_layers_window)
+            self.layers_toggle_button.pack(side="left", padx=2)
+            
+            self.apply_button = tk.Button(apply_frame, text="Apply Canvas to Images", command=self.apply_canvas_to_images)
+            self.apply_button.pack(side="right", padx=5)
+            
+            # Load grid options
+            self.load_grid_options()
+            
+            if not self.grid_combobox['values']:
+                self.grid_combobox['values'] = ["None"]
+                self.selected_grid.set("None")
+                
+            # Initialize layers window after canvas_window is created
+            self.layers_window = LayersWindow(self.root, self.canvas_window)
+            
+        except Exception as e:
+            logging.error(f"Error setting up UI: {e}", exc_info=True)
 
     # --- Canvas Size Update Command ---
     def update_canvas_size(self):
@@ -165,8 +326,14 @@ class TerrainToolApp:
     def copy_canvas(self):
         try:
             logging.info(f"Copy Canvas requested (Mode: {self.capture_mode_var.get()})...")
-            if not (hasattr(self.canvas_window, 'current_scale_factor') and abs(self.canvas_window.current_scale_factor - 1.0) < 0.001): messagebox.showwarning("Zoom Error", "Please reset zoom to 100% before copying."); logging.warning("Copy cancelled: Zoom not 100%."); return
-            if not hasattr(self.canvas_window, 'get_canvas_as_image'): logging.error("Copy Error"); messagebox.showerror("Error", "Copy fn missing."); return
+            if not (hasattr(self.canvas_window, 'current_scale_factor') and abs(self.canvas_window.current_scale_factor - 1.0) < 0.001):
+                messagebox.showwarning("Zoom Error", "Please reset zoom to 100% before copying (hotkey Z)")
+                logging.warning("Copy cancelled: Zoom not 100%.")
+                return
+            if not hasattr(self.canvas_window, 'get_canvas_as_image'):
+                logging.error("Copy Error")
+                messagebox.showerror("Error", "Copy fn missing.")
+                return
             img = self.canvas_window.get_canvas_as_image(capture_mode=self.capture_mode_var.get()) # Pass mode
             if not img: messagebox.showwarning("Copy", "Could not capture canvas."); return
             output = io.BytesIO(); img.save(output, "BMP"); data = output.getvalue(); output.close()
@@ -546,6 +713,28 @@ class TerrainToolApp:
         except Exception as e:
             logging.error(f"Error in bottom alignment: {e}", exc_info=True)
             messagebox.showerror("Error", "Bottom alignment failed")
+
+    def toggle_layers_window(self):
+        """Toggle the visibility of the layers window."""
+        try:
+            if not self.layers_window.winfo_viewable():
+                self.layers_window.show()
+                self.layers_toggle_button.config(text="Hide Layers")
+            else:
+                self.layers_window.hide()
+                self.layers_toggle_button.config(text="Show Layers")
+        except Exception as e:
+            logging.error(f"Error toggling layers window: {e}", exc_info=True)
+
+    def on_opacity_change(self, value):
+        """Handle opacity slider changes."""
+        try:
+            if not self.canvas_window.pasted_overlay_pil_image:
+                return
+            opacity = int(float(value))
+            self.canvas_window.set_overlay_opacity(opacity / 100.0)
+        except Exception as e:
+            logging.error(f"Error changing overlay opacity: {e}", exc_info=True)
 
 if __name__ == "__main__":
     logging.info("="*20 + " Starting CanvasToImages " + "="*20)

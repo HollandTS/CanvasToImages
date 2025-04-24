@@ -19,22 +19,36 @@ class TileHandler:
                  if view.canvas.find_withtag(existing_id): view.canvas.delete(existing_id)
 
             display_pil = image.copy()
-            # Use background handler to apply transparency
-            if view.background_color:
-                display_pil = view.bg_handler.apply_transparency(display_pil, view.background_color)
+            # Apply transparency if transparency color is set
+            if view.transparency_color:
+                hex_color = view.transparency_color.lstrip('#')
+                color_tuple = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+                display_pil = view.bg_handler.apply_transparency(
+                    display_pil, 
+                    color_tuple,
+                    invert=view.app.invert_transparency.get() if hasattr(view.app, 'invert_transparency') else False
+                )
 
             tk_image = ImageTk.PhotoImage(display_pil)
             view.tk_images.append(tk_image) # Add to list for tiles
 
             image_id = view.canvas.create_image(x, y, anchor="nw", image=tk_image, tags=("draggable", filename))
-            view.images[filename] = {"id": image_id, "image": image, "original_image": image.copy(), "filename": filename, "x": x, "y": y}
+            view.images[filename] = {
+                "id": image_id,
+                "image": image,
+                "original_image": image.copy(),
+                "filename": filename,
+                "x": x,
+                "y": y
+            }
 
             if view.pasted_overlay_item_id and view.canvas.find_withtag(view.pasted_overlay_item_id):
                  view.canvas.tag_raise(image_id, view.pasted_overlay_item_id) # Place under overlay
 
             logging.info(f"Tile Add: OK (ID: {image_id}).")
 
-        except Exception as e: logging.error(f"Tile Add Error ({filename}): {e}", exc_info=True)
+        except Exception as e:
+            logging.error(f"Tile Add Error ({filename}): {e}", exc_info=True)
 
     def remove_tile(self, filename):
         """Removes a specific tile instance from the canvas."""

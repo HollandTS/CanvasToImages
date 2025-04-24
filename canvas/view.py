@@ -25,6 +25,12 @@ class CanvasWindow(tk.Frame):
             logging.info("Initializing CanvasWindow View")
             super().__init__(parent)
             self.grid_window = grid_window; self.app = app
+            
+            # Initialize undo/redo system
+            self.undo_stack = []
+            self.redo_stack = []
+            self.undo_max = 50  # Maximum number of undo states
+            
             self.canvas_world_width = initial_width
             self.canvas_world_height = initial_height
             self.canvas = Canvas(self, bg="white", bd=0, highlightthickness=0)
@@ -35,9 +41,13 @@ class CanvasWindow(tk.Frame):
             checkbox_frame = tk.Frame(self); checkbox_frame.place(in_=self.canvas, relx=1.0, rely=1.0, x=-5, y=-5, anchor="se")
             self.snap_enabled = tk.BooleanVar(value=True); self.snap_checkbox = tk.Checkbutton(checkbox_frame, text="Snap", variable=self.snap_enabled, bg="#F0F0F0", relief="raised", bd=1, padx=2); self.snap_checkbox.pack(side="right", padx=(2,0))
             self.overlap_enabled = tk.BooleanVar(value=True); self.overlap_checkbox = tk.Checkbutton(checkbox_frame, text="Overlap", variable=self.overlap_enabled, bg="#F0F0F0", relief="raised", bd=1, padx=2); self.overlap_checkbox.pack(side="right", padx=(0,2))
+            # Add Refresh button next to Overlay group
+            refresh_btn = tk.Button(self, text="Refresh Images", command=self.refresh_images, bg="#F0F0F0", relief="raised", bd=1)
+            refresh_btn.place(in_=self.canvas, relx=0.0, rely=0.0, x=5, y=5, anchor="nw")
             # State
-            self.images = {}; self.tk_images = []; self.background_color = None; self.transparency_color = None; self.pasted_overlay_pil_image = None; self.pasted_overlay_tk_image = None; self.pasted_overlay_item_id = None; self.pasted_overlay_offset = (0, 0); self.current_grid_info = None; self.last_clicked_item_id = None; self.selected_item_ids = set(); self.current_scale_factor = 1.0; self.zoom_label = None; self.zoom_label_after_id = None
-            self.last_capture_origin = None
+            self.images = {}; self.tk_images = []; self.background_color = None; self.transparency_color = None; self.pasted_overlay_pil_image = None; self.pasted_overlay_tk_image = None; self.pasted_overlay_item_id = None; self.pasted_overlay_offset = (0, 0); self.current_grid_info = None; self.last_clicked_item_id = None; self.selected_item_ids = set(); self.current_scale_factor = 1.0; self.zoom_label = None; self.zoom_label_after_id = None; self.last_capture_origin = None; self.layer_behind = False; self.next_z_index = 1; self.overlay_opacity = 1.0  # Add overlay opacity tracking
+            self.layer_behind = False  # Add this line to track layer mode
+            self.next_z_index = 1  # Track next available z-index
             # Handlers
             self.bg_handler = BackgroundHandler(self)
             self.tile_handler = TileHandler(self)
@@ -55,20 +65,43 @@ class CanvasWindow(tk.Frame):
             self.canvas.focus_set()
             self.canvas.bind("<Button-1>", lambda e: self.canvas.focus_set(), add='+')
 
+            # Add undo/redo bindings
+            self.canvas.bind("<Control-z>", self.undo)
+            self.canvas.bind("<Control-y>", self.redo)
+            
+            # Add delete hotkeys
+            self.canvas.bind("<Delete>", lambda e: self.delete_selection_or_last_clicked())
+            self.canvas.bind("<Key-x>", lambda e: self.delete_selection_or_last_clicked())
+            self.canvas.bind("<Key-X>", lambda e: self.delete_selection_or_last_clicked())
+
             logging.info("CanvasWindow View initialized successfully")
             self.after(100, self._draw_canvas_borders); self.after(110, self.draw_grid)
         except Exception as e: logging.error(f"Error initializing CanvasWindow View: {e}", exc_info=True)
 
     # --- Public Methods ---
     def add_image(self, image, filename, x=0, y=0):
+        """Add an image to the canvas with z-index tracking."""
         # Store original image for palette reset
         self.tile_handler.add_tile(image, filename, x, y)
         if filename in self.images:
             self.images[filename]['original_image'] = image.copy()
+            self.images[filename]['z_index'] = self.next_z_index
+            # Store the current transparency color with the image
+            if self.transparency_color:
+                self.images[filename]['initial_transparency_color'] = self.transparency_color
+            self.next_z_index += 1
+            # Save state for undo after adding new image
+            self.save_state()
+        # Update layers window if it exists
+        if hasattr(self.app, 'layers_window') and self.app.layers_window:
+            self.app.layers_window.refresh_layers()
 
     def set_transparency_color(self, color_hex):
+        """Set the transparency color and redraw canvas immediately."""
         self.bg_handler.set_color(color_hex)
         self.transparency_color = color_hex
+        # Redraw canvas immediately to show transparency effect
+        self.redraw_canvas()
 
     def set_background_color(self, color_hex):
         self.set_transparency_color(color_hex)
@@ -121,7 +154,19 @@ class CanvasWindow(tk.Frame):
                     if item_id == self.pasted_overlay_item_id: coords=self.pasted_overlay_offset; pil_img=self.pasted_overlay_pil_image
                     else:
                         for fname, data in self.images.items():
-                            if data['id'] == item_id: coords=(data['x'], data['y']); pil_img=data['image']; is_tile=True; break
+                            if data['id'] == item_id: 
+                                coords=(data['x'], data['y'])
+                                pil_img=data.get('original_image', data['image']).copy()
+                                if self.transparency_color:
+                                    hex_color = self.transparency_color.lstrip('#')
+                                    color_tuple = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+                                    pil_img = self.bg_handler.apply_transparency(
+                                        pil_img,
+                                        color_tuple,
+                                        invert=self.app.invert_transparency.get() if hasattr(self.app, 'invert_transparency') else False
+                                    )
+                                is_tile=True
+                                break
                     if coords and pil_img: items_data_for_render.append((item_id, pil_img, coords, is_tile))
                 valid_bbox = True # Assume valid if capturing full canvas
 
@@ -135,7 +180,19 @@ class CanvasWindow(tk.Frame):
                     if item_id == self.pasted_overlay_item_id: coords=self.pasted_overlay_offset; pil_img=self.pasted_overlay_pil_image
                     else:
                         for fname, data in self.images.items():
-                            if data['id'] == item_id: coords=(data['x'], data['y']); pil_img=data['image']; is_tile=True; break
+                            if data['id'] == item_id: 
+                                coords=(data['x'], data['y'])
+                                pil_img=data.get('original_image', data['image']).copy()
+                                if self.transparency_color:
+                                    hex_color = self.transparency_color.lstrip('#')
+                                    color_tuple = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+                                    pil_img = self.bg_handler.apply_transparency(
+                                        pil_img,
+                                        color_tuple,
+                                        invert=self.app.invert_transparency.get() if hasattr(self.app, 'invert_transparency') else False
+                                    )
+                                is_tile=True
+                                break
                     if coords and pil_img:
                         items_data_for_render.append((item_id, pil_img, coords, is_tile)) # Collect data
                         x,y=coords; w,h=pil_img.size; min_x=min(min_x,x); min_y=min(min_y,y); max_x=max(max_x,x+w); max_y=max(max_y,y+h); valid_bbox=True
@@ -161,11 +218,22 @@ class CanvasWindow(tk.Frame):
                     if item_id == self.pasted_overlay_item_id: coords=self.pasted_overlay_offset; pil_img=self.pasted_overlay_pil_image
                     else:
                         for fname, data in self.images.items():
-                            if data['id'] == item_id: coords=(data['x'], data['y']); pil_img=data['image']; is_tile=True; break
+                            if data['id'] == item_id: 
+                                coords=(data['x'], data['y'])
+                                pil_img=data.get('original_image', data['image']).copy()
+                                if self.transparency_color:
+                                    hex_color = self.transparency_color.lstrip('#')
+                                    color_tuple = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+                                    pil_img = self.bg_handler.apply_transparency(
+                                        pil_img,
+                                        color_tuple,
+                                        invert=self.app.invert_transparency.get() if hasattr(self.app, 'invert_transparency') else False
+                                    )
+                                is_tile=True
+                                break
                     if coords and pil_img: items_data_for_render.append((item_id, pil_img, coords, is_tile))
                 logging.info(f"View capture render size: {target_width}x{target_height}, Area @1x: ({canvas_bbox_l:.0f},{canvas_bbox_t:.0f})->({canvas_bbox_r:.0f},{canvas_bbox_b:.0f})")
                 valid_bbox = True # View capture is always valid if dimensions > 0
-
 
             if not valid_bbox or target_width <= 0 or target_height <= 0: logging.warning("Render size/bbox invalid."); return None
             target_image = Image.new("RGBA", (target_width, target_height), (255, 255, 255, 0))
@@ -175,7 +243,6 @@ class CanvasWindow(tk.Frame):
             logging.debug(f"Rendering {len(ordered_render_items)} items for mode '{capture_mode}'...")
             for item_id, pil_to_render, coords_1x, is_tile in ordered_render_items:
                 img_to_paste = pil_to_render.copy()
-                if is_tile and self.background_color: img_to_paste = self.bg_handler.apply_transparency(img_to_paste, self.background_color)
                 paste_x = int(round(coords_1x[0] - render_origin_x))
                 paste_y = int(round(coords_1x[1] - render_origin_y))
                 img_to_paste_rgba = img_to_paste.convert("RGBA")
@@ -196,7 +263,7 @@ class CanvasWindow(tk.Frame):
         else: messagebox.showerror("Error", "Could not capture canvas image to save.")
 
     def delete_selection_or_last_clicked(self):
-        # (Remains the same)
+        """Delete selected items and update layers window."""
         items_to_delete = set(); log_prefix = "Delete Item:"
         if self.selected_item_ids: items_to_delete=self.selected_item_ids.copy(); log_prefix=f"Delete Multi ({len(items_to_delete)}):"
         elif self.last_clicked_item_id: items_to_delete.add(self.last_clicked_item_id); log_prefix=f"Delete Last Clicked:"
@@ -219,6 +286,9 @@ class CanvasWindow(tk.Frame):
         logging.info(f"{log_prefix} Deleted {deleted_count} item(s).")
         self.last_clicked_item_id=None; self.selected_item_ids.clear();
         if hasattr(self.interaction_handler,'clear_selection_visuals'): self.interaction_handler.clear_selection_visuals()
+        # After deletion, update layers window
+        if hasattr(self.app, 'layers_window') and self.app.layers_window:
+            self.app.layers_window.refresh_layers()
 
     # --- Zoom Methods ---
     def handle_zoom(self, event):
@@ -240,7 +310,14 @@ class CanvasWindow(tk.Frame):
                 new_w=max(1,int(original_pil.width*new_total_scale_factor)); new_h=max(1,int(original_pil.height*new_total_scale_factor))
                 # Use NEAREST for pixel-perfect zoom
                 resized_pil = original_pil.resize((new_w, new_h), Image.NEAREST)
-                if self.background_color: resized_pil = self.bg_handler.apply_transparency(resized_pil, self.background_color)
+                if self.transparency_color:
+                    hex_color = self.transparency_color.lstrip('#')
+                    color_tuple = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+                    resized_pil = self.bg_handler.apply_transparency(
+                        resized_pil, 
+                        color_tuple,
+                        invert=self.app.invert_transparency.get() if hasattr(self.app, 'invert_transparency') else False
+                    )
                 new_tk = ImageTk.PhotoImage(resized_pil); new_tile_tk_images.append(new_tk)
                 if self.canvas.find_withtag(item_id): self.canvas.itemconfig(item_id, image=new_tk)
             if self.pasted_overlay_item_id and self.pasted_overlay_pil_image:
@@ -268,7 +345,14 @@ class CanvasWindow(tk.Frame):
                 item_id=image_info['id']; original_pil=image_info['image'];
                 if not original_pil: continue
                 display_pil=original_pil.copy()
-                if self.background_color: display_pil = self.bg_handler.apply_transparency(display_pil, self.background_color)
+                if self.transparency_color:
+                    hex_color = self.transparency_color.lstrip('#')
+                    color_tuple = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+                    display_pil = self.bg_handler.apply_transparency(
+                        display_pil, 
+                        color_tuple,
+                        invert=self.app.invert_transparency.get() if hasattr(self.app, 'invert_transparency') else False
+                    )
                 new_tk = ImageTk.PhotoImage(display_pil); new_tile_tk_images.append(new_tk)
                 if self.canvas.find_withtag(item_id): self.canvas.itemconfig(item_id, image=new_tk)
             if self.pasted_overlay_item_id and self.pasted_overlay_pil_image:
@@ -462,9 +546,92 @@ class CanvasWindow(tk.Frame):
     def select_image(self, index): logging.warning("CanvasWindow.select_image(index) not implemented.")
 
     def redraw_canvas(self):
-        # Get the current color from the app's color_entry
-        color = self.app.color_entry.get() if hasattr(self.app, 'color_entry') else '#000000'
-        self.set_background_color(color)
+        """Redraws all items on the canvas with z-index ordering."""
+        try:
+            # Store current items with their z-index
+            current_items = []
+            for filename, data in self.images.items():
+                current_items.append((data.get('z_index', 0), filename, data))
+            
+            # Sort by z-index
+            current_items.sort(key=lambda x: x[0])
+            
+            # Clear canvas
+            self.canvas.delete("all")
+            
+            # Set canvas background color
+            if self.background_color:
+                hex_color = self.background_color.lstrip('#')
+                rgb = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+                self.canvas.configure(bg=f'#{hex_color}')
+            else:
+                self.canvas.configure(bg='white')  # Default to white
+            
+            # Draw overlay first if it should be behind
+            if self.layer_behind and self.pasted_overlay_pil_image:
+                overlay_image = ImageTk.PhotoImage(self.pasted_overlay_pil_image)
+                self.pasted_overlay_tk_image = overlay_image
+                self.pasted_overlay_item_id = self.canvas.create_image(
+                    self.pasted_overlay_offset[0],
+                    self.pasted_overlay_offset[1],
+                    image=overlay_image,
+                    anchor="nw",
+                    tags=("draggable", "pasted_overlay")
+                )
+            
+            # Draw all regular images in z-index order
+            for _, filename, data in current_items:
+                try:
+                    # Get original image and apply transparency if needed
+                    image = data.get('original_image', data['image']).copy()
+                    if self.transparency_color:
+                        hex_color = self.transparency_color.lstrip('#')
+                        color_tuple = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+                        image = self.bg_handler.apply_transparency(
+                            image,
+                            color_tuple,
+                            invert=self.app.invert_transparency.get() if hasattr(self.app, 'invert_transparency') else False
+                        )
+                    
+                    # Create and display image
+                    tk_image = ImageTk.PhotoImage(image)
+                    self.tk_images.append(tk_image)
+                    image_id = self.canvas.create_image(
+                        data['x'], data['y'],
+                        anchor="nw",
+                        image=tk_image,
+                        tags=("draggable", filename)
+                    )
+                    data['id'] = image_id
+                    
+                except Exception as e:
+                    logging.error(f"Error redrawing image {filename}: {e}", exc_info=True)
+            
+            # Draw overlay last if it should be on top
+            if not self.layer_behind and self.pasted_overlay_pil_image:
+                overlay_image = ImageTk.PhotoImage(self.pasted_overlay_pil_image)
+                self.pasted_overlay_tk_image = overlay_image
+                self.pasted_overlay_item_id = self.canvas.create_image(
+                    self.pasted_overlay_offset[0],
+                    self.pasted_overlay_offset[1],
+                    image=overlay_image,
+                    anchor="nw",
+                    tags=("draggable", "pasted_overlay")
+                )
+            
+            # Draw grid
+            self.draw_grid()
+            
+            # Update selection visuals
+            if hasattr(self.interaction_handler, 'update_selection_visuals'):
+                self.interaction_handler.update_selection_visuals()
+            
+            # Update layers window if it exists
+            if hasattr(self.app, 'layers_window') and self.app.layers_window:
+                self.app.layers_window.refresh_layers()
+            
+        except Exception as e:
+            logging.error(f"Error in redraw_canvas: {e}", exc_info=True)
 
     def update_overlay_stacking(self):
         """Raise or lower the overlay image based on the checkbox state."""
@@ -485,30 +652,52 @@ class CanvasWindow(tk.Frame):
         if hasattr(self, 'transparency_color') and self.transparency_color:
             hexval = self.transparency_color.lstrip('#')
             transparency_color = tuple(int(hexval[i:i+2], 16) for i in (0, 2, 4))
+            
         def closest_color(pixel, palette):
             # Find closest color in palette (Euclidean distance in RGB)
             arr = np.array(palette)
             dists = np.sum((arr - pixel) ** 2, axis=1)
             return tuple(arr[np.argmin(dists)])
+            
         for filename, data in self.images.items():
-            pil_img = data['image']
-            arr = np.array(pil_img.convert('RGB'))
-            shape = arr.shape
-            arr_flat = arr.reshape(-1, 3)
-            remapped = []
-            for px in arr_flat:
-                if transparency_color and tuple(px) == transparency_color:
-                    remapped.append([0,0,0,0])
-                else:
-                    rgb = closest_color(px, palette_colors)
-                    remapped.append([*rgb,255])
-            arr_remap = np.array(remapped, dtype=np.uint8).reshape((shape[0], shape[1], 4))
-            new_img = Image.fromarray(arr_remap, 'RGBA')
-            data['image'] = new_img
-            tk_img = ImageTk.PhotoImage(new_img)
-            self.tk_images.append(tk_img)
-            if self.canvas.find_withtag(data['id']):
-                self.canvas.itemconfig(data['id'], image=tk_img)
+            try:
+                # Load original image if available
+                pil_img = data.get('original_image', data['image'])
+                if not pil_img:
+                    continue
+                    
+                arr = np.array(pil_img.convert('RGB'))
+                shape = arr.shape
+                arr_flat = arr.reshape(-1, 3)
+                remapped = []
+                
+                for px in arr_flat:
+                    if transparency_color and tuple(px) == transparency_color:
+                        remapped.append([0,0,0,0])
+                    else:
+                        rgb = closest_color(px, palette_colors)
+                        remapped.append([*rgb,255])
+                        
+                arr_remap = np.array(remapped, dtype=np.uint8).reshape((shape[0], shape[1], 4))
+                new_img = Image.fromarray(arr_remap, 'RGBA')
+                
+                # Update the image in our data structure
+                data['image'] = new_img
+                
+                # Create and update the display image
+                tk_img = ImageTk.PhotoImage(new_img)
+                self.tk_images.append(tk_img)
+                if self.canvas.find_withtag(data['id']):
+                    self.canvas.itemconfig(data['id'], image=tk_img)
+                    
+                # Save the remapped image to file when Apply Canvas is used
+                if hasattr(self, 'app') and hasattr(self.app, 'applying_canvas') and self.app.applying_canvas:
+                    new_img.save(filename)
+                    logging.info(f"Saved palette-remapped image to {filename}")
+                    
+            except Exception as e:
+                logging.error(f"Error remapping image {filename}: {e}", exc_info=True)
+                
         logging.info(f"Remapped all images to palette of {len(palette_colors)} colors, preserving transparency.")
 
     def refresh_all_tiles_to_original(self):
@@ -683,3 +872,329 @@ class CanvasWindow(tk.Frame):
     def align_bottom(self):
         """Align selected items' bottom edges to nearest grid line."""
         return self.alignment_handler.align_bottom()
+
+    def set_layer_behind(self, behind_mode):
+        """Deprecated method."""
+        pass
+
+    def on_overlay_behind_toggle(self):
+        """Deprecated method."""
+        pass
+
+    def get_layer_info(self):
+        """Get information about all layers for the layers window."""
+        try:
+            layers = []
+            # Get all draggable items in current stacking order
+            all_items = self.canvas.find_all()
+            
+            # Create a mapping of item IDs to filenames
+            id_to_filename = {}
+            for filepath, data in self.images.items():
+                if 'id' in data:
+                    # Get just the filename without path
+                    filename = os.path.basename(filepath)
+                    id_to_filename[data['id']] = {'display_name': filename, 'full_path': filepath}
+            
+            # Process items in reverse order (top to bottom)
+            for item_id in reversed(all_items):
+                if "draggable" not in self.canvas.gettags(item_id):
+                    continue
+                    
+                if item_id == self.pasted_overlay_item_id:
+                    # Add overlay layer
+                    layers.append({
+                        'filename': 'Overlay',
+                        'z_index': float('inf'),
+                        'id': item_id
+                    })
+                elif item_id in id_to_filename:
+                    # Add image layer with display name
+                    info = id_to_filename[item_id]
+                    layers.append({
+                        'filename': info['display_name'],  # Use display name for UI
+                        'full_path': info['full_path'],   # Keep full path for internal use
+                        'z_index': self.images[info['full_path']].get('z_index', 0),
+                        'id': item_id
+                    })
+            
+            return layers
+            
+        except Exception as e:
+            logging.error(f"Error getting layer info: {e}", exc_info=True)
+            return []
+
+    def save_state(self):
+        """Save current state for undo."""
+        try:
+            state = {
+                'images': {},
+                'overlay': {
+                    'image': self.pasted_overlay_pil_image.copy() if self.pasted_overlay_pil_image else None,
+                    'offset': self.pasted_overlay_offset
+                }
+            }
+            
+            # Save image positions and z-indices
+            for filepath, data in self.images.items():
+                state['images'][filepath] = {
+                    'x': data['x'],
+                    'y': data['y'],
+                    'z_index': data.get('z_index', 0)
+                }
+            
+            # Add to undo stack and clear redo stack
+            self.undo_stack.append(state)
+            self.redo_stack.clear()  # Clear redo stack when new action is performed
+            
+            # Keep only the last N states
+            if len(self.undo_stack) > self.undo_max:
+                self.undo_stack.pop(0)
+                
+        except Exception as e:
+            logging.error(f"Error saving state: {e}", exc_info=True)
+
+    def undo(self, event=None):
+        """Restore the last saved state."""
+        try:
+            if not self.undo_stack:
+                return
+                
+            # Get current state for redo
+            current_state = self._get_current_state()
+            if not current_state:
+                return
+                
+            # Get the last state from undo stack
+            state = self.undo_stack.pop()
+            
+            # Add current state to redo stack
+            self.redo_stack.append(current_state)
+            
+            # Restore state
+            self._restore_state(state)
+            
+        except Exception as e:
+            logging.error(f"Error in undo: {e}", exc_info=True)
+
+    def redo(self, event=None):
+        """Redo the last undone action."""
+        try:
+            if not self.redo_stack:
+                return
+                
+            # Get current state for undo
+            current_state = self._get_current_state()
+            if not current_state:
+                return
+                
+            # Get the last state from redo stack
+            state = self.redo_stack.pop()
+            
+            # Add current state to undo stack
+            self.undo_stack.append(current_state)
+            
+            # Restore state
+            self._restore_state(state)
+            
+        except Exception as e:
+            logging.error(f"Error in redo: {e}", exc_info=True)
+
+    def _get_current_state(self):
+        """Get the current state of the canvas."""
+        try:
+            state = {
+                'images': {},
+                'overlay': {
+                    'image': self.pasted_overlay_pil_image.copy() if self.pasted_overlay_pil_image else None,
+                    'offset': self.pasted_overlay_offset
+                }
+            }
+            
+            for filepath, data in self.images.items():
+                state['images'][filepath] = {
+                    'x': data['x'],
+                    'y': data['y'],
+                    'z_index': data.get('z_index', 0)
+                }
+                
+            return state
+        except Exception as e:
+            logging.error(f"Error getting current state: {e}", exc_info=True)
+            return None
+
+    def _restore_state(self, state):
+        """Restore a saved state."""
+        try:
+            if not state:
+                return
+                
+            # Restore image positions and z-indices
+            for filepath, data in state['images'].items():
+                if filepath in self.images:
+                    self.images[filepath]['x'] = data['x']
+                    self.images[filepath]['y'] = data['y']
+                    self.images[filepath]['z_index'] = data.get('z_index', 0)
+            
+            # Restore overlay
+            overlay_state = state['overlay']
+            if overlay_state['image']:
+                self.pasted_overlay_pil_image = overlay_state['image']
+                self.pasted_overlay_offset = overlay_state['offset']
+            else:
+                self.pasted_overlay_pil_image = None
+                self.pasted_overlay_offset = (0, 0)
+            
+            # Redraw canvas with restored state
+            self.redraw_canvas()
+            
+        except Exception as e:
+            logging.error(f"Error restoring state: {e}", exc_info=True)
+
+    def set_overlay_opacity(self, opacity):
+        """Set the opacity of the overlay image."""
+        try:
+            if not self.pasted_overlay_pil_image:
+                return
+            
+            # Store the opacity value
+            self.overlay_opacity = max(0.0, min(1.0, opacity))
+            
+            # Get the original overlay image
+            overlay = self.pasted_overlay_pil_image
+            
+            # Create a copy with the new opacity
+            if overlay.mode != 'RGBA':
+                overlay = overlay.convert('RGBA')
+            
+            # Get the alpha channel and multiply it by the opacity
+            r, g, b, a = overlay.split()
+            a = a.point(lambda x: int(x * self.overlay_opacity))
+            
+            # Merge the channels back
+            overlay_with_opacity = Image.merge('RGBA', (r, g, b, a))
+            
+            # Update the Tkinter image and redraw
+            self.pasted_overlay_tk_image = ImageTk.PhotoImage(overlay_with_opacity)
+            if self.pasted_overlay_item_id:
+                self.canvas.itemconfig(self.pasted_overlay_item_id, image=self.pasted_overlay_tk_image)
+            
+        except Exception as e:
+            logging.error(f"Error setting overlay opacity: {e}", exc_info=True)
+
+    def handle_release(self, event):
+        # Ignore B1 release if panning
+        if self.pan_data.get("active"): return
+        view = self.view
+        try:
+            # Determine which items were being dragged
+            items_affected = list(self.view.selected_item_ids)
+            if not items_affected and self.view.last_clicked_item_id:
+                items_affected = [self.view.last_clicked_item_id]
+
+            if items_affected:
+                # Clamp Positions FIRST
+                for item_id in items_affected:
+                    if view.canvas.find_withtag(item_id):
+                        self._clamp_item_to_bounds(item_id)
+
+                # Resolve Overlaps SECOND
+                if not view.overlap_enabled.get():
+                    all_item_ids = set(view.canvas.find_withtag("draggable"))
+                    if view.pasted_overlay_item_id:
+                        all_item_ids.add(view.pasted_overlay_item_id)
+                    for moved_id in items_affected:
+                        if view.canvas.find_withtag(moved_id):
+                            self._resolve_overlaps(moved_id, all_item_ids - {moved_id})
+
+                # Apply Snapping THIRD
+                if view.snap_enabled.get() and view.current_grid_info:
+                    for item_id in items_affected:
+                        if view.canvas.find_withtag(item_id):
+                            self.snap_to_grid(item_id)
+
+                # Store final coords FOURTH
+                final_coords_map = {}
+                for item_id in items_affected:
+                    if view.canvas.find_withtag(item_id):
+                        coords = view.canvas.coords(item_id)
+                        if coords:
+                            x = int(round(coords[0]))
+                            y = int(round(coords[1]))
+                            final_coords_map[item_id] = (x, y)
+                            self._update_item_stored_coords(item_id, x, y)
+
+                # Update visuals LAST
+                self._update_selection_visual_positions()
+
+                # Save state for undo after drag is complete
+                view.save_state()
+
+                # Log final positions
+                for item_id, pos in final_coords_map.items():
+                    logging.info(f"Final pos Item {item_id}: ({pos[0]},{pos[1]})")
+
+        except Exception as e:
+            logging.error(f"Int Release Error: {e}", exc_info=True)
+        finally:
+            self._reset_drag_state()  # Reset item drag, not pan
+
+    def refresh_images(self):
+        """Reload all images from their files to show current state."""
+        try:
+            updated_count = 0
+            error_count = 0
+            
+            for filename, data in list(self.images.items()):
+                try:
+                    if not os.path.exists(filename):
+                        logging.warning(f"Skip refresh '{filename}': File not found.")
+                        error_count += 1
+                        continue
+                        
+                    # Load current file state
+                    fresh_image = Image.open(filename).convert("RGBA")
+                    
+                    # Store as new original
+                    data['original_image'] = fresh_image.copy()
+                    data['image'] = fresh_image.copy()
+                    
+                    # Create new display image
+                    if self.transparency_color:
+                        hex_color = self.transparency_color.lstrip('#')
+                        color_tuple = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+                        fresh_image = self.bg_handler.apply_transparency(
+                            fresh_image,
+                            color_tuple,
+                            invert=self.app.invert_transparency.get() if hasattr(self.app, 'invert_transparency') else False
+                        )
+                    
+                    # Update display
+                    tk_img = ImageTk.PhotoImage(fresh_image)
+                    self.tk_images.append(tk_img)
+                    if self.canvas.find_withtag(data['id']):
+                        self.canvas.itemconfig(data['id'], image=tk_img)
+                    updated_count += 1
+                    
+                except Exception as e:
+                    logging.error(f"Error refreshing '{filename}': {e}", exc_info=True)
+                    error_count += 1
+                    continue
+            
+            # Show results
+            if updated_count > 0:
+                messagebox.showinfo("Refresh Complete", f"Updated {updated_count} images." + 
+                                  (f"\nErrors: {error_count}" if error_count > 0 else ""))
+            else:
+                if error_count > 0:
+                    messagebox.showerror("Refresh Failed", f"Failed to refresh any images.\nErrors: {error_count}")
+                else:
+                    messagebox.showinfo("Refresh", "No images to refresh.")
+                    
+        except Exception as e:
+            logging.error(f"Error in refresh_images: {e}", exc_info=True)
+            messagebox.showerror("Error", f"Failed to refresh images.\n{str(e)}")
+            
+        # Update layers window if it exists
+        if hasattr(self.app, 'layers_window') and self.app.layers_window:
+            self.app.layers_window.refresh_layers()

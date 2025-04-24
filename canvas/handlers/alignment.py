@@ -1,20 +1,17 @@
 import logging
 
 class AlignmentHandler:
-    def __init__(self, canvas_window):
-        self.canvas_window = canvas_window
-        self.move_step = 2  # Default step size for movement
+    def __init__(self, view):
+        self.view = view
+        self.move_step = 2  # Default move step size
 
     def set_move_step(self, step):
-        """Set the movement step size."""
+        """Set the step size for movement operations."""
         try:
-            step_value = int(step)
-            if step_value > 0:
-                self.move_step = step_value
-                return True
-        except (ValueError, TypeError):
-            pass
-        return False
+            self.move_step = max(1, int(step))  # Ensure step is at least 1
+        except (ValueError, TypeError) as e:
+            logging.error(f"Invalid move step value: {e}")
+            self.move_step = 2  # Reset to default if invalid
 
     def get_move_step(self):
         """Get the current movement step size."""
@@ -23,13 +20,13 @@ class AlignmentHandler:
     def _get_grid_points(self):
         """Get grid points based on current grid type."""
         try:
-            grid_info = self.canvas_window.current_grid_info
+            grid_info = self.view.current_grid_info
             if not grid_info:
                 return None
 
             grid_type = grid_info.get('type')
-            canvas_width = self.canvas_window.canvas_world_width
-            canvas_height = self.canvas_window.canvas_world_height
+            canvas_width = self.view.canvas_world_width
+            canvas_height = self.view.canvas_world_height
             
             if grid_type == "pixel":
                 step = grid_info.get('step')
@@ -61,12 +58,12 @@ class AlignmentHandler:
         """Get currently selected items."""
         try:
             selected_items = []
-            item_ids = (self.canvas_window.selected_item_ids.copy() if self.canvas_window.selected_item_ids 
-                       else {self.canvas_window.last_clicked_item_id} if self.canvas_window.last_clicked_item_id 
+            item_ids = (self.view.selected_item_ids.copy() if self.view.selected_item_ids 
+                       else {self.view.last_clicked_item_id} if self.view.last_clicked_item_id 
                        else set())
 
             for item_id in item_ids:
-                for filename, data in self.canvas_window.images.items():
+                for filename, data in self.view.images.items():
                     if data['id'] == item_id:
                         selected_items.append({
                             'id': item_id,
@@ -94,7 +91,7 @@ class AlignmentHandler:
         try:
             item['data']['x'] = x
             item['data']['y'] = y
-            self.canvas_window.canvas.coords(item['id'], x, y)
+            self.view.canvas.coords(item['id'], x, y)
         except Exception as e:
             logging.error(f"Error updating item position: {e}", exc_info=True)
 
@@ -106,11 +103,14 @@ class AlignmentHandler:
                 logging.info("No items selected for movement")
                 return False
 
+            # Save state before alignment
+            self.view.save_state()
+
             for item in items:
                 new_x = item['x'] - self.move_step
                 self._update_item_position(item, new_x, item['y'])
 
-            self.canvas_window.canvas.update_idletasks()
+            self.view.canvas.update_idletasks()
             return True
 
         except Exception as e:
@@ -125,11 +125,14 @@ class AlignmentHandler:
                 logging.info("No items selected for movement")
                 return False
 
+            # Save state before alignment
+            self.view.save_state()
+
             for item in items:
                 new_x = item['x'] + self.move_step
                 self._update_item_position(item, new_x, item['y'])
 
-            self.canvas_window.canvas.update_idletasks()
+            self.view.canvas.update_idletasks()
             return True
 
         except Exception as e:
@@ -144,11 +147,14 @@ class AlignmentHandler:
                 logging.info("No items selected for movement")
                 return False
 
+            # Save state before alignment
+            self.view.save_state()
+
             for item in items:
                 new_y = item['y'] - self.move_step
                 self._update_item_position(item, item['x'], new_y)
 
-            self.canvas_window.canvas.update_idletasks()
+            self.view.canvas.update_idletasks()
             return True
 
         except Exception as e:
@@ -163,13 +169,41 @@ class AlignmentHandler:
                 logging.info("No items selected for movement")
                 return False
 
+            # Save state before alignment
+            self.view.save_state()
+
             for item in items:
                 new_y = item['y'] + self.move_step
                 self._update_item_position(item, item['x'], new_y)
 
-            self.canvas_window.canvas.update_idletasks()
+            self.view.canvas.update_idletasks()
             return True
 
         except Exception as e:
             logging.error(f"Error in bottom movement: {e}", exc_info=True)
-            return False 
+            return False
+
+    def move_selection(self, dx, dy):
+        """Move selected items by the given delta multiplied by move_step."""
+        try:
+            dx = dx * self.move_step
+            dy = dy * self.move_step
+            selected_items = self.view.get_selected_items()
+            if not selected_items:
+                return
+
+            for item_id in selected_items:
+                if item_id in self.view.images:
+                    # Get current position
+                    coords = self.view.canvas.coords(item_id)
+                    if coords:
+                        # Move the item on canvas
+                        self.view.canvas.move(item_id, dx, dy)
+                        # Update stored coordinates
+                        self.view._update_item_stored_coords(item_id, coords[0] + dx, coords[1] + dy)
+
+            # Update selection rectangle
+            self.view.update_selection_visuals()
+            
+        except Exception as e:
+            logging.error(f"Error moving selection: {e}") 

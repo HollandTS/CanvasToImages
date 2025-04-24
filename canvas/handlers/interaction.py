@@ -134,6 +134,7 @@ class InteractionHandler:
             logging.error(f"Drag error: {e}", exc_info=True)
 
     def handle_release(self, event):
+        """Handle dragging of selected items."""
         # Ignore B1 release if panning
         if self.pan_data.get("active"): return
         view = self.view
@@ -177,6 +178,10 @@ class InteractionHandler:
 
                 # Update visuals LAST
                 self._update_selection_visual_positions()
+
+                # Save state for undo after drag is complete
+                if self.drag_data.get("dragging") and final_coords_map:
+                    view.save_state()
 
                 # Log final positions
                 for item_id, pos in final_coords_map.items():

@@ -12,89 +12,85 @@ class BackgroundHandler:
     def __init__(self, canvas_view):
         self.view = canvas_view
 
-    def apply_transparency(self, image, color_tuple, tolerance=None):
+    def apply_transparency(self, image, color, invert=False):
+        """Apply transparency to image based on transparency color.
+        When invert is True, only pixels matching the transparency color remain visible."""
         try:
-            if not isinstance(color_tuple, tuple) or len(color_tuple) != 3: return image
-            if tolerance is None:
-                # Try to get from app if available
-                if hasattr(self.view, 'app') and hasattr(self.view.app, 'tolerance_value'):
-                    tolerance = self.view.app.tolerance_value.get()
-                else:
-                    tolerance = 0
-            img_rgba = image.convert("RGBA"); datas = list(img_rgba.getdata())
+            if not color:
+                return image
+
+            # Convert hex color to RGB if it's a string
+            if isinstance(color, str):
+                color = color.lstrip('#')
+                color = tuple(int(color[i:i+2], 16) for i in (0, 2, 4))
+
+            # Convert image to RGBA if it isn't already
+            if image.mode != 'RGBA':
+                image = image.convert('RGBA')
+
+            # Get image data
+            data = image.getdata()
             new_data = []
-            invert = False
-            if hasattr(self.view, 'app') and hasattr(self.view.app, 'invert_transparency'):
-                invert = self.view.app.invert_transparency.get()
-            def is_close(c1, c2, tol):
-                return sum((a-b)**2 for a,b in zip(c1, c2)) <= tol*tol
-            for item in datas:
-                if is_close(item[:3], color_tuple, tolerance):
-                    if invert:
-                        new_data.append(item)
+
+            # Get tolerance value from canvas window
+            tolerance = 0
+            if hasattr(self.view, 'app') and hasattr(self.view.app, 'tolerance_value'):
+                tolerance = self.view.app.tolerance_value.get()
+
+            # Process each pixel
+            for item in data:
+                # Get RGB and alpha components
+                r, g, b = item[:3]
+                alpha = item[3] if len(item) > 3 else 255
+
+                # Check if pixel matches transparency color within tolerance
+                matches = all(abs(item[i] - color[i]) <= tolerance for i in range(3))
+
+                if invert:
+                    # In invert mode: ONLY matching pixels remain visible
+                    if matches:
+                        new_data.append((r, g, b, alpha))  # Keep matching pixels visible
                     else:
-                        new_data.append((item[0], item[1], item[2], 0))
+                        new_data.append((r, g, b, 0))  # Make everything else transparent
                 else:
-                    if invert:
-                        new_data.append((item[0], item[1], item[2], 0))
+                    # In normal mode: matching pixels become transparent
+                    if matches:
+                        new_data.append((r, g, b, 0))  # Make matching pixels transparent
                     else:
-                        new_data.append(item)
-            img_rgba.putdata(new_data)
-            return img_rgba
-        except Exception as e: logging.error(f"BG Apply Trans error: {e}", exc_info=True); return image
+                        new_data.append((r, g, b, alpha))  # Keep non-matching pixels as they are
+
+            # Create new image with updated data
+            new_image = Image.new('RGBA', image.size)
+            new_image.putdata(new_data)
+            return new_image
+
+        except Exception as e:
+            logging.error(f"Error applying transparency: {e}", exc_info=True)
+            return image
 
     def set_color(self, color_hex):
+        """Set the transparency color and update all images."""
         view = self.view
         try:
-            logging.info(f"BG Set Color: Hex: {color_hex}")
+            logging.info(f"Setting transparency color: {color_hex}")
             color_hex = color_hex.lstrip('#')
-            if len(color_hex) != 6: raise ValueError("Hex color must be 6 digits")
-            new_bg_color = tuple(int(color_hex[i:i+2], 16) for i in (0, 2, 4))
-            logging.info(f"BG Set Color: RGB tuple: {new_bg_color}")
-            view.background_color = new_bg_color
-
-            # Always set the canvas background to white (or your preferred neutral color)
-            view.canvas.config(bg='white')
-
-            # --- FULL REDRAW: Remove all draggable items except overlay and re-add ---
-            for item_id in view.canvas.find_withtag("draggable"):
-                tags = view.canvas.gettags(item_id)
-                if "pasted_overlay" not in tags:
-                    view.canvas.delete(item_id)
-            new_tk_images = []
-            logging.info(f"BG Set Color: Redraw debug: images={list(view.images.keys())}")
-            for filename, image_info in list(view.images.items()):
-                logging.info(f"BG Set Color: Processing {filename}")
-                if os.path.exists(filename):
-                    logging.info(f"BG Set Color: Reloading {filename} from disk")
-                    original_image = Image.open(filename).convert("RGBA")
-                else:
-                    logging.warning(f"BG Set Color: File not found: {filename}, using in-memory image")
-                    original_image = image_info["image"].copy()
-                display_image = original_image.copy()
-                if view.background_color:
-                    logging.info(f"BG Set Color: Applying transparency for {filename} with color {view.background_color}")
-                    display_image = self.apply_transparency(display_image, view.background_color)
-                else:
-                    logging.info(f"BG Set Color: No background color set for {filename}")
-                # Re-apply zoom scaling if zoom exists
-                if hasattr(view, 'current_scale_factor') and view.current_scale_factor != 1.0:
-                    scaled_w = max(1, int(display_image.width * view.current_scale_factor))
-                    scaled_h = max(1, int(display_image.height * view.current_scale_factor))
-                    display_image = display_image.resize((scaled_w, scaled_h), LANCZOS_RESAMPLE)
-                tk_image = ImageTk.PhotoImage(display_image)
-                new_tk_images.append(tk_image)
-                new_item_id = view.canvas.create_image(image_info["x"], image_info["y"], anchor="nw", image=tk_image, tags=("draggable", filename))
-                view.images[filename]['id'] = new_item_id # Update ID
-                # Re-apply coordinate scaling if zoom exists
-                if hasattr(view, 'current_scale_factor') and view.current_scale_factor != 1.0:
-                    view.canvas.scale(new_item_id, image_info["x"], image_info["y"], view.current_scale_factor, view.current_scale_factor)
-                if view.pasted_overlay_item_id and view.canvas.find_withtag(view.pasted_overlay_item_id):
-                    view.canvas.tag_lower(new_item_id, view.pasted_overlay_item_id)
-            view.tk_images = new_tk_images
-            logging.info(f"BG Set Color: Redrawn all images from disk.")
-        except ValueError as ve: logging.error(f"BG Set Color: Invalid hex '{color_hex}': {ve}"); messagebox.showerror("Error", f"Invalid color: {color_hex}."); view.background_color = None
-        except Exception as e: logging.error(f"BG Set Color Error: {e}", exc_info=True); view.background_color = None
+            if len(color_hex) != 6:
+                raise ValueError("Hex color must be 6 digits")
+            
+            # Store the transparency color
+            view.transparency_color = color_hex
+            
+            # Trigger a redraw of the canvas to update all images
+            if hasattr(view, 'redraw_canvas'):
+                view.redraw_canvas()
+            
+        except ValueError as ve:
+            logging.error(f"Invalid transparency color hex '{color_hex}': {ve}")
+            messagebox.showerror("Error", f"Invalid color: {color_hex}.")
+            view.transparency_color = None
+        except Exception as e:
+            logging.error(f"Error setting transparency color: {e}", exc_info=True)
+            view.transparency_color = None
 
     # *** CORRECTED SIGNATURE: Only accept event directly ***
     def handle_pick_click(self, event):
