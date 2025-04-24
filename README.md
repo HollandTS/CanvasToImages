@@ -3,7 +3,7 @@ Tool to drag images onto a canvas, copy canvas, make edits with external tools, 
 First Alpha! Make backup of your images first. Use with care!
 
 ## Download EXE here:
-https://mega.nz/file/FroxDAZR#8xDFlrvfQqKbbsfziybn6qmaTotFTBWLt7VO37ieJk4
+https://github.com/HollandTS/CanvasToImages/releases/download/V1.01/CanvasToImages_v1.01.zip
 
 ### How it works: 
 Drag images onto the canvas, select transparency color (optional), copy the canvas (or save) to your clipboard by pressing the Copy Button. 
