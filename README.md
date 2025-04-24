@@ -2,6 +2,8 @@
 Tool to edit multiple images in a canvas and save back to individual images (any images. Also options for game tiles)
 First Alpha! use with care!
 
+## Download EXE here:
+https://mega.nz/file/FroxDAZR#8xDFlrvfQqKbbsfziybn6qmaTotFTBWLt7VO37ieJk4
 
 How it works: 
 run main.py
