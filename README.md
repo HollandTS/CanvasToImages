@@ -3,7 +3,7 @@ Tool to drag images onto a canvas, copy canvas, make edits with external tools, 
 First Alpha! Make backup of your images first. Use with care!
 
 ## Download EXE here:
-[https://github.com/HollandTS/CanvasToImages/releases/download/V1.01/CanvasToImages_v1.01.zip](https://github.com/HollandTS/CanvasToImages/releases)
+[[https://github.com/HollandTS/CanvasToImages/releases](https://github.com/HollandTS/CanvasToImages/releases)](https://github.com/HollandTS/CanvasToImages/releases)
 (CanvaToImages.zip)
 
 ### How it works: 
