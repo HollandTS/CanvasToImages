@@ -14,7 +14,7 @@ Warning: Upon pressing 'Apply Canvas to Images': ALL IMAGES WILL BE SAVED IMMEDI
 Press 'Apply Canvas to Images' to save all the individual images with the pasted overlay.
 
 ![cliff_preview](https://github.com/user-attachments/assets/759b57b4-795d-4287-b470-825eec7fdd28)
-Just noticed the first image doesnt get the transparency color put back properly, will fix in next release!
+(the bug is fixed where some images dont get their transparency pasted back, get latest.)
 
 ### Top Controls:
 
