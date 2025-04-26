@@ -31,6 +31,16 @@ def display_images(grid_window):
             grid_window.canvas.create_image(x, y, anchor="nw", image=tk_image, tags=(str(i), "draggable", "image"))
             grid_window.canvas.create_text(x + grid_window.grid_size // 2, y + grid_window.grid_size + 10, text=os.path.basename(grid_window.image_paths[i]), anchor="n", tags=(str(i), "text"))
         update_selection(grid_window)
+
+        # --- Add mouse bindings for selection, drag, and box select ---
+        grid_window.canvas.bind('<ButtonPress-1>', lambda event: handle_image_mouse_down(grid_window, event))
+        grid_window.canvas.bind('<B1-Motion>', lambda event: handle_image_mouse_move(grid_window, event))
+        grid_window.canvas.bind('<ButtonRelease-1>', lambda event: handle_image_mouse_up(grid_window, event))
+        grid_window.canvas.bind('<ButtonPress-3>', lambda event: start_box_select(grid_window, event))
+        grid_window.canvas.bind('<B3-Motion>', lambda event: on_box_select(grid_window, event))
+        grid_window.canvas.bind('<ButtonRelease-3>', lambda event: end_box_select(grid_window, event))
+        grid_window.canvas.bind('<Control-Button-1>', lambda event: handle_ctrl_click(grid_window, event))
+        grid_window.canvas.bind('<Shift-Button-1>', lambda event: handle_shift_click(grid_window, event))
     except Exception as e:
         logging.error(f"Error displaying images: {e}")
 
@@ -71,19 +81,19 @@ def handle_image_click(grid_window, event):
             tags = grid_window.canvas.gettags(item)
             if "image" in tags:
                 image_index = int(tags[0])
-                if image_index in grid_window.selected_items:
-                    grid_window.selected_items.remove(image_index)
-                else:
-                    grid_window.selected_items.append(image_index)
-                update_selection(grid_window)
+                # Only change selection if the clicked image is not already selected
+                if image_index not in grid_window.selected_items or not grid_window.selected_items:
+                    grid_window.selected_items = [image_index]
+                    update_selection(grid_window)
+                # else: keep current selection (for multi-drag)
 
-            # Prepare for dragging
-            grid_window.drag_data["items"] = [item]
+            # Prepare for dragging: drag all selected images
+            grid_window.drag_data["items"] = [grid_window.canvas.find_withtag(str(i))[0] for i in grid_window.selected_items]
             grid_window.drag_data["x"] = event.x
             grid_window.drag_data["y"] = event.y
-            grid_window.drag_data["image_indices"] = [int(tags[0])]
+            grid_window.drag_data["image_indices"] = list(grid_window.selected_items)
 
-            # Create a floating window for dragging
+            # Create a floating window for each selected image
             grid_window.drag_data["floating_images"] = []
             for image_index in grid_window.drag_data["image_indices"]:
                 image = grid_window.tk_images[image_index]
@@ -108,13 +118,28 @@ def handle_image_release(grid_window, event):
     try:
         for floating_image in grid_window.drag_data["floating_images"]:
             floating_image.destroy()
+        # Debug: log the indices being dropped
+        logging.debug(f"handle_image_release: image_indices = {grid_window.drag_data['image_indices']}")
         if grid_window.app.canvas_window.is_above_canvas(event):
-            for image_index in grid_window.drag_data["image_indices"]:
+            indices = grid_window.drag_data["image_indices"]
+            n = len(indices)
+            if n == 0:
+                return
+            import math
+            grid_cols = math.ceil(math.sqrt(n))
+            grid_rows = math.ceil(n / grid_cols)
+            spacing = 32  # You can adjust this spacing as needed
+            x0 = event.x_root - grid_window.app.canvas_window.canvas.winfo_rootx()
+            y0 = event.y_root - grid_window.app.canvas_window.canvas.winfo_rooty()
+            for idx, image_index in enumerate(indices):
                 image = grid_window.images[image_index]
                 filename = grid_window.image_paths[image_index]
-                x, y = event.x_root - grid_window.app.canvas_window.canvas.winfo_rootx(), event.y_root - grid_window.app.canvas_window.canvas.winfo_rooty()
+                row = idx // grid_cols
+                col = idx % grid_cols
+                x = x0 + col * spacing
+                y = y0 + row * spacing
                 grid_window.app.canvas_window.add_image(image, filename, x, y)
-                grid_window.app.add_to_filelist(filename)  # Add the filename to the file list
+                grid_window.app.add_to_filelist(filename)
         grid_window.drag_data = {"x": 0, "y": 0, "items": [], "image_indices": [], "floating_images": []}
     except Exception as e:
         logging.error(f"Error handling image release in GridWindow: {e}")
@@ -214,3 +239,71 @@ def apply_grid_size(grid_window, value):
         display_images(grid_window)
     except Exception as e:
         logging.error(f"Error applying grid size: {e}")
+
+# --- Click-vs-Drag Logic ---
+def handle_image_mouse_down(grid_window, event):
+    try:
+        item = grid_window.canvas.find_closest(event.x, event.y)
+        if item:
+            tags = grid_window.canvas.gettags(item)
+            if "image" in tags:
+                image_index = int(tags[0])
+                grid_window._mouse_down_info = {
+                    "image_index": image_index,
+                    "x": event.x,
+                    "y": event.y,
+                    "event": event,
+                    "drag_started": False,
+                    "was_selected": image_index in grid_window.selected_items,
+                }
+    except Exception as e:
+        logging.error(f"Error in handle_image_mouse_down: {e}")
+
+def handle_image_mouse_move(grid_window, event):
+    try:
+        info = getattr(grid_window, '_mouse_down_info', None)
+        if not info or info.get("drag_started"): return
+        dx = abs(event.x - info["x"])
+        dy = abs(event.y - info["y"])
+        if dx > 3 or dy > 3:
+            # Start drag
+            info["drag_started"] = True
+            image_index = info["image_index"]
+            # If the pressed image was already selected, drag all selected; else, drag just this one
+            if info["was_selected"] and grid_window.selected_items:
+                drag_indices = list(grid_window.selected_items)
+            else:
+                drag_indices = [image_index]
+                grid_window.selected_items = [image_index]
+                update_selection(grid_window)
+            grid_window.drag_data["items"] = [grid_window.canvas.find_withtag(str(i))[0] for i in drag_indices]
+            grid_window.drag_data["x"] = event.x
+            grid_window.drag_data["y"] = event.y
+            grid_window.drag_data["image_indices"] = drag_indices
+            grid_window.drag_data["floating_images"] = []
+            for image_index in drag_indices:
+                image = grid_window.tk_images[image_index]
+                floating_image = tk.Toplevel(grid_window)
+                floating_image.overrideredirect(True)
+                floating_image.geometry(f"+{event.x_root}+{event.y_root}")
+                label = tk.Label(floating_image, image=image)
+                label.pack()
+                grid_window.drag_data["floating_images"].append(floating_image)
+            logging.debug(f"Drag started with indices: {drag_indices}")
+    except Exception as e:
+        logging.error(f"Error in handle_image_mouse_move: {e}")
+
+def handle_image_mouse_up(grid_window, event):
+    try:
+        info = getattr(grid_window, '_mouse_down_info', None)
+        if not info:
+            return
+        if not info.get("drag_started"):
+            # This was a click, not a drag: update selection
+            image_index = info["image_index"]
+            grid_window.selected_items = [image_index]
+            update_selection(grid_window)
+        # Clean up
+        grid_window._mouse_down_info = None
+    except Exception as e:
+        logging.error(f"Error in handle_image_mouse_up: {e}")

@@ -206,4 +206,48 @@ class AlignmentHandler:
             self.view.update_selection_visuals()
             
         except Exception as e:
-            logging.error(f"Error moving selection: {e}") 
+            logging.error(f"Error moving selection: {e}")
+
+    def align_iso(self):
+        """Align selected items to the nearest isometric (diamond) grid intersection."""
+        try:
+            grid_info = self.view.current_grid_info
+            if not grid_info or grid_info.get('type') != 'diamond':
+                logging.info("Isometric grid not active or grid info missing")
+                return False
+
+            cell_w = grid_info.get('cell_width')
+            cell_h = grid_info.get('cell_height')
+            if not cell_w or not cell_h or cell_w <= 0 or cell_h <= 0:
+                logging.info("Invalid isometric grid cell size")
+                return False
+
+            items = self._get_selected_items()
+            if not items:
+                logging.info("No items selected for isometric alignment")
+                return False
+
+            # Save state before alignment
+            self.view.save_state()
+
+            for item in items:
+                # Use the anchor point (x, y) for alignment
+                x, y = item['x'], item['y']
+                # Convert to isometric grid coordinates (u, v)
+                grid_u = (y / cell_h) + (x / cell_w)
+                grid_v = (y / cell_h) - (x / cell_w)
+                # Snap to nearest integer grid intersection
+                nearest_u = round(grid_u)
+                nearest_v = round(grid_v)
+                # Convert back to (x, y)
+                snap_x = (nearest_u - nearest_v) * cell_w / 2.0
+                snap_y = (nearest_u + nearest_v) * cell_h / 2.0
+                # Move the item
+                self._update_item_position(item, int(round(snap_x)), int(round(snap_y)))
+
+            self.view.canvas.update_idletasks()
+            return True
+
+        except Exception as e:
+            logging.error(f"Error in isometric alignment: {e}", exc_info=True)
+            return False

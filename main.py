@@ -153,6 +153,9 @@ class TerrainToolApp:
             
             self.align_bottom_button = tk.Button(align_frame, text="↓", command=self.align_bottom)
             self.align_bottom_button.pack(side="left", padx=2)
+            
+            self.align_iso_button = tk.Button(align_frame, text="Iso", command=self.align_iso)
+            self.align_iso_button.pack(side="left", padx=2)
 
             # Move step input
             move_step_frame = tk.Frame(align_frame)
@@ -713,6 +716,22 @@ class TerrainToolApp:
         except Exception as e:
             logging.error(f"Error in bottom alignment: {e}", exc_info=True)
             messagebox.showerror("Error", "Bottom alignment failed")
+
+    def align_iso(self):
+        """Align selected items to an isometric grid."""
+        try:
+            if not hasattr(self.canvas_window, 'align_iso'):
+                messagebox.showerror("Error", "Isometric alignment function not available")
+                return
+            
+            if not self.canvas_window.align_iso():
+                messagebox.showinfo("Align", "No items to align or no grid available")
+                return
+                
+            logging.info("Isometric alignment completed")
+        except Exception as e:
+            logging.error(f"Error in isometric alignment: {e}", exc_info=True)
+            messagebox.showerror("Error", "Isometric alignment failed")
 
     def toggle_layers_window(self):
         """Toggle the visibility of the layers window."""

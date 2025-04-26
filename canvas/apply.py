@@ -42,7 +42,7 @@ def run_apply_canvas_to_images(canvas_window):
         error_count = 0
 
         # Iterate Tiles
-        for filename, image_info in list(view.images.items()):
+        for filename, image_info in sorted(view.images.items(), key=lambda x: x[1].get('z_index', 0)):
             if not os.path.exists(filename):
                 logging.warning(f"Skip '{filename}': Not found.")
                 error_count += 1
@@ -60,15 +60,19 @@ def run_apply_canvas_to_images(canvas_window):
                 if 'initial_transparency_color' in image_info:
                     color_hex = image_info['initial_transparency_color'].lstrip('#')
                     transparency_color = tuple(int(color_hex[i:i+2], 16) for i in (0, 2, 4))
+                elif hasattr(view, 'transparency_color') and view.transparency_color:
+                    color_hex = view.transparency_color.lstrip('#')
+                    transparency_color = tuple(int(color_hex[i:i+2], 16) for i in (0, 2, 4))
                 invert_transparency = view.app.invert_transparency.get() if hasattr(view.app, 'invert_transparency') else False
                 tolerance = view.app.tolerance_value.get() if hasattr(view.app, 'tolerance_value') else 0
 
                 tile_x = image_info.get('x', 0)
                 tile_y = image_info.get('y', 0)
 
-                # Get current image state (includes palette changes)
+                # Get current image state and original image
                 current_image = image_info['image']
-                if not current_image:
+                original_image = image_info.get('original_image')
+                if not current_image or not original_image:
                     continue
 
                 if has_overlay:
@@ -77,20 +81,22 @@ def run_apply_canvas_to_images(canvas_window):
                     output_tile = Image.new('RGBA', (w, h))
                     output_pixels = output_tile.load()
                     current_pixels = current_image.load()
+                    original_pixels = original_image.load()
 
                     # Pixel processing
                     for px in range(w):
                         for py in range(h):
                             current_rgba = current_pixels[px, py]
-                            current_rgb = current_rgba[:3]
+                            original_rgb = original_pixels[px, py][:3]
 
-                            # Check if pixel matches transparency color
+                            # Check if pixel was originally transparent
                             is_transparent = False
                             if transparency_color:
-                                matches = all(abs(current_rgb[i] - transparency_color[i]) <= tolerance for i in range(3))
+                                matches = all(abs(original_rgb[i] - transparency_color[i]) <= tolerance for i in range(3))
                                 is_transparent = matches if not invert_transparency else not matches
 
                             if is_transparent:
+                                # Use the original transparency color
                                 output_pixels[px, py] = (transparency_color[0], transparency_color[1], transparency_color[2], 255)
                             else:
                                 overlay_read_x = tile_x + px - apply_origin_x
@@ -118,12 +124,12 @@ def run_apply_canvas_to_images(canvas_window):
                     output_tile.save(filename)
                 else:
                     # Handle palette changes while preserving original transparency
-                    if current_image != image_info.get('original_image'):
+                    if current_image != original_image:
                         w, h = current_image.size
                         output_tile = Image.new('RGBA', (w, h))
                         output_pixels = output_tile.load()
                         current_pixels = current_image.load()
-                        original_pixels = image_info.get('original_image').load()
+                        original_pixels = original_image.load()
 
                         # Process each pixel
                         for px in range(w):
@@ -154,7 +160,7 @@ def run_apply_canvas_to_images(canvas_window):
                     view.grid_window.update_image_in_grid(filename, Image.open(filename))
                 except Exception as reload_err:
                     logging.error(f"Grid update failed '{filename}': {reload_err}")
-
+                
                 processed_count += 1
 
             except Exception as tile_error:
@@ -171,7 +177,7 @@ def run_apply_canvas_to_images(canvas_window):
                 messagebox.showinfo("Success", log_msg)
         else:
             messagebox.showinfo("Apply", "No changes to apply.")
-
+        
     except Exception as e:
         logging.error(f"Critical apply error: {e}", exc_info=True)
         messagebox.showerror("Error", f"Apply failed.\n{e}")

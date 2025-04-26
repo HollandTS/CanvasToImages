@@ -9,63 +9,72 @@ class TileHandler:
         self.view = canvas_view
 
     def add_tile(self, image, filename, x=0, y=0):
-        """Adds a tile image to the canvas."""
-        view = self.view
+        """Add a tile to the canvas, accounting for scroll position."""
         try:
-            logging.info(f"Tile Add: {filename} at ({x},{y})")
-            if filename in view.images:
-                 logging.warning(f"Tile Add: Replacing: {filename}")
-                 existing_id = view.images[filename]['id']
-                 if view.canvas.find_withtag(existing_id): view.canvas.delete(existing_id)
-
-            display_pil = image.copy()
-            # Apply transparency if transparency color is set
-            if view.transparency_color:
-                hex_color = view.transparency_color.lstrip('#')
+            # Convert screen coordinates to canvas coordinates
+            canvas_x = int(round(self.view.canvas.canvasx(x)))
+            canvas_y = int(round(self.view.canvas.canvasy(y)))
+            
+            # Create display version of image
+            display_image = image.copy()
+            if self.view.transparency_color:
+                hex_color = self.view.transparency_color.lstrip('#')
                 color_tuple = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
-                display_pil = view.bg_handler.apply_transparency(
-                    display_pil, 
+                display_image = self.view.bg_handler.apply_transparency(
+                    display_image,
                     color_tuple,
-                    invert=view.app.invert_transparency.get() if hasattr(view.app, 'invert_transparency') else False
+                    invert=self.view.app.invert_transparency.get() if hasattr(self.view.app, 'invert_transparency') else False
                 )
-
-            tk_image = ImageTk.PhotoImage(display_pil)
-            view.tk_images.append(tk_image) # Add to list for tiles
-
-            image_id = view.canvas.create_image(x, y, anchor="nw", image=tk_image, tags=("draggable", filename))
-            view.images[filename] = {
-                "id": image_id,
-                "image": image,
-                "original_image": image.copy(),
-                "filename": filename,
-                "x": x,
-                "y": y
+            
+            # Create Tkinter image and add to canvas
+            tk_image = ImageTk.PhotoImage(display_image)
+            self.view.tk_images.append(tk_image)
+            
+            # Create canvas item
+            item_id = self.view.canvas.create_image(
+                canvas_x, canvas_y,
+                image=tk_image,
+                anchor="nw",
+                tags=("draggable", filename)
+            )
+            
+            # Store image data
+            self.view.images[filename] = {
+                'image': image,
+                'id': item_id,
+                'x': canvas_x,
+                'y': canvas_y,
+                'z_index': self.view.next_z_index
             }
-
-            if view.pasted_overlay_item_id and view.canvas.find_withtag(view.pasted_overlay_item_id):
-                 view.canvas.tag_raise(image_id, view.pasted_overlay_item_id) # Place under overlay
-
-            logging.info(f"Tile Add: OK (ID: {image_id}).")
-
+            
+            # Update z-index
+            self.view.next_z_index += 1
+            
+            # Update layers window if it exists
+            if hasattr(self.view.app, 'layers_window') and self.view.app.layers_window:
+                self.view.app.layers_window.refresh_layers()
+                
+            return item_id
+            
         except Exception as e:
-            logging.error(f"Tile Add Error ({filename}): {e}", exc_info=True)
+            logging.error(f"Error adding tile: {e}", exc_info=True)
+            return None
 
     def remove_tile(self, filename):
-        """Removes a specific tile instance from the canvas."""
-        view = self.view
+        """Remove a tile from the canvas."""
         try:
-            logging.info(f"Tile Remove: {filename}")
-            if filename in view.images:
-                item_id = view.images[filename]["id"]
-                if view.canvas.find_withtag(item_id): view.canvas.delete(item_id)
-                # TODO: Remove corresponding tk_image from view.tk_images
-                del view.images[filename]
-                logging.info(f"Tile Remove: OK.")
-                # Update external listbox via app reference
-                if hasattr(view.app, 'remove_from_filelist'):
-                    view.app.remove_from_filelist(filename)
-            else: logging.warning(f"Tile Remove: Not found: {filename}")
-        except Exception as e: logging.error(f"Tile Remove Error ({filename}): {e}", exc_info=True)
+            if filename in self.view.images:
+                item_id = self.view.images[filename]['id']
+                if self.view.canvas.find_withtag(item_id):
+                    self.view.canvas.delete(item_id)
+                del self.view.images[filename]
+                
+                # Update layers window if it exists
+                if hasattr(self.view.app, 'layers_window') and self.view.app.layers_window:
+                    self.view.app.layers_window.refresh_layers()
+                    
+        except Exception as e:
+            logging.error(f"Error removing tile: {e}", exc_info=True)
 
     def remove_selected_tile(self):
         """Removes the tile selected in the app's listbox."""

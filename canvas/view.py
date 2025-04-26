@@ -1,6 +1,6 @@
 # --- canvas/view.py ---
 import tkinter as tk
-from tkinter import Canvas, filedialog, messagebox
+from tkinter import Canvas, filedialog, messagebox, ttk
 import logging
 import math
 import os
@@ -401,47 +401,141 @@ class CanvasWindow(tk.Frame):
          logging.debug(f"Canvas border drawn at 0,0 to {scaled_width},{scaled_height}")
 
     def draw_grid(self):
-        self.canvas.delete("grid_line"); grid_info=self.current_grid_info;
-        if not grid_info: return
-        grid_type=grid_info.get("type"); grid_color="#E0E0E0"; grid_tag="grid_line"
-        view_x1=self.canvas.canvasx(0); view_y1=self.canvas.canvasy(0); view_x2=self.canvas.canvasx(self.canvas.winfo_width()); view_y2=self.canvas.canvasy(self.canvas.winfo_height())
-        world_x1_cv = 0; world_y1_cv = 0; world_x2_cv = self.canvas_world_width*self.current_scale_factor; world_y2_cv = self.canvas_world_height*self.current_scale_factor
-        draw_xmin = max(view_x1, world_x1_cv); draw_ymin = max(view_y1, world_y1_cv); draw_xmax = min(view_x2, world_x2_cv); draw_ymax = min(view_y2, world_y2_cv)
-        # logging.debug(f"Drawing grid '{grid_type}' in canvas coords ({draw_xmin:.1f},{draw_ymin:.1f}) to ({draw_xmax:.1f},{draw_ymax:.1f})")
-        if grid_type=="pixel":
-            step=grid_info.get("step");
-            if not step or step<=0: return
-            scaled_step = step * self.current_scale_factor;
-            if scaled_step < 2: return # Avoid drawing too many lines
-            start_x = math.floor(draw_xmin / scaled_step) * scaled_step; end_x = math.ceil(draw_xmax / scaled_step) * scaled_step
-            start_y = math.floor(draw_ymin / scaled_step) * scaled_step; end_y = math.ceil(draw_ymax / scaled_step) * scaled_step
-            for x in range(int(round(start_x)), int(round(end_x + scaled_step)), int(round(scaled_step))): self.canvas.create_line(x, draw_ymin, x, draw_ymax, fill=grid_color, tags=grid_tag)
-            for y in range(int(round(start_y)), int(round(end_y + scaled_step)), int(round(scaled_step))): self.canvas.create_line(draw_xmin, y, draw_xmax, y, fill=grid_color, tags=grid_tag)
-        elif grid_type=="diamond":
-            cell_w=grid_info.get("cell_width"); cell_h=grid_info.get("cell_height");
-            if not cell_w or cell_w<=0 or not cell_h or cell_h<=0 or cell_w==0: return
-            scaled_cell_w = cell_w * self.current_scale_factor; scaled_cell_h = cell_h * self.current_scale_factor
-            if scaled_cell_w < 2 or scaled_cell_h < 1: return
-            half_w=scaled_cell_w/2.0; slope1=scaled_cell_h/scaled_cell_w; slope2=-scaled_cell_h/scaled_cell_w
-            c1_vals = [draw_ymin-slope1*draw_xmin, draw_ymin-slope1*draw_xmax, draw_ymax-slope1*draw_xmin, draw_ymax-slope1*draw_xmax]; min_c1=min(c1_vals)-scaled_cell_h; max_c1=max(c1_vals)+scaled_cell_h
-            c2_vals = [draw_ymin-slope2*draw_xmin, draw_ymin-slope2*draw_xmax, draw_ymax-slope2*draw_xmin, draw_ymax-slope2*draw_xmax]; min_c2=min(c2_vals)-scaled_cell_h; max_c2=max(c2_vals)+scaled_cell_h
-            start_k1=math.floor(min_c1/scaled_cell_h); end_k1=math.ceil(max_c1/scaled_cell_h)
-            start_k2=math.floor(min_c2/scaled_cell_h); end_k2=math.ceil(max_c2/scaled_cell_h)
-            for k in range(start_k1, end_k1 + 1): self.draw_iso_line_segment(slope1, k * scaled_cell_h, draw_xmin, draw_ymin, draw_xmax, draw_ymax, grid_color, grid_tag)
-            for k in range(start_k2, end_k2 + 1): self.draw_iso_line_segment(slope2, k * scaled_cell_h, draw_xmin, draw_ymin, draw_xmax, draw_ymax, grid_color, grid_tag)
-        # --- Ensure correct stacking order ---
-        # Lower grid lines below all draggable items (tiles and overlay)
-        if self.canvas.find_withtag(grid_tag): # Only lower if grid lines were drawn
-            if self.canvas.find_withtag("draggable"): # Only lower if draggable items exist
+        """Draw grid lines accounting for scroll position and zoom."""
+        self.canvas.delete("grid_line")
+        grid_info = self.current_grid_info
+        if not grid_info:
+            return
+
+        grid_type = grid_info.get("type")
+        grid_color = "#E0E0E0"
+        grid_tag = "grid_line"
+
+        # Get visible area in canvas coordinates
+        view_x1 = int(self.canvas.canvasx(0))
+        view_y1 = int(self.canvas.canvasy(0))
+        view_x2 = int(self.canvas.canvasx(self.canvas.winfo_width()))
+        view_y2 = int(self.canvas.canvasy(self.canvas.winfo_height()))
+
+        # Get world bounds in canvas coordinates
+        world_x1 = 0
+        world_y1 = 0
+        world_x2 = int(self.canvas_world_width * self.current_scale_factor)
+        world_y2 = int(self.canvas_world_height * self.current_scale_factor)
+
+        # Calculate drawing bounds - intersection of visible area and world bounds
+        draw_xmin = max(view_x1, world_x1)
+        draw_ymin = max(view_y1, world_y1)
+        draw_xmax = min(view_x2, world_x2)
+        draw_ymax = min(view_y2, world_y2)
+
+        if grid_type == "pixel":
+            step = grid_info.get("step")
+            if not step or step <= 0:
+                return
+
+            # Scale the grid step by zoom factor
+            scaled_step = step * self.current_scale_factor
+
+            # Don't draw if lines would be too dense
+            if scaled_step < 2:
+                return
+
+            # Calculate grid line positions
+            start_x = math.floor(draw_xmin / scaled_step) * scaled_step
+            end_x = math.ceil(draw_xmax / scaled_step) * scaled_step
+            start_y = math.floor(draw_ymin / scaled_step) * scaled_step
+            end_y = math.ceil(draw_ymax / scaled_step) * scaled_step
+
+            # Draw vertical lines
+            x = start_x
+            while x <= end_x:
+                if world_x1 <= x <= world_x2:
+                    self.canvas.create_line(
+                        x, max(draw_ymin, world_y1),
+                        x, min(draw_ymax, world_y2),
+                        fill=grid_color, tags=grid_tag
+                    )
+                x += scaled_step
+
+            # Draw horizontal lines
+            y = start_y
+            while y <= end_y:
+                if world_y1 <= y <= world_y2:
+                    self.canvas.create_line(
+                        max(draw_xmin, world_x1), y,
+                        min(draw_xmax, world_x2), y,
+                        fill=grid_color, tags=grid_tag
+                    )
+                y += scaled_step
+
+        elif grid_type == "diamond":
+            cell_w = grid_info.get("cell_width")
+            cell_h = grid_info.get("cell_height")
+            if not cell_w or cell_w <= 0 or not cell_h or cell_h <= 0:
+                return
+
+            # Scale cell dimensions
+            scaled_cell_w = cell_w * self.current_scale_factor
+            scaled_cell_h = cell_h * self.current_scale_factor
+
+            if scaled_cell_w < 2 or scaled_cell_h < 1:
+                return
+
+            # Calculate diamond grid parameters
+            half_w = scaled_cell_w / 2.0
+            slope1 = scaled_cell_h / scaled_cell_w
+            slope2 = -scaled_cell_h / scaled_cell_w
+
+            # Calculate intersection points for visible area
+            c1_vals = [
+                draw_ymin - slope1 * draw_xmin,
+                draw_ymin - slope1 * draw_xmax,
+                draw_ymax - slope1 * draw_xmin,
+                draw_ymax - slope1 * draw_xmax
+            ]
+            c2_vals = [
+                draw_ymin - slope2 * draw_xmin,
+                draw_ymin - slope2 * draw_xmax,
+                draw_ymax - slope2 * draw_xmin,
+                draw_ymax - slope2 * draw_xmax
+            ]
+
+            min_c1 = min(c1_vals) - scaled_cell_h
+            max_c1 = max(c1_vals) + scaled_cell_h
+            min_c2 = min(c2_vals) - scaled_cell_h
+            max_c2 = max(c2_vals) + scaled_cell_h
+
+            # Calculate line indices
+            start_k1 = math.floor(min_c1 / scaled_cell_h)
+            end_k1 = math.ceil(max_c1 / scaled_cell_h)
+            start_k2 = math.floor(min_c2 / scaled_cell_h)
+            end_k2 = math.ceil(max_c2 / scaled_cell_h)
+
+            # Draw diagonal lines
+            for k in range(start_k1, end_k1 + 1):
+                self.draw_iso_line_segment(slope1, k * scaled_cell_h,
+                                         draw_xmin, draw_ymin,
+                                         draw_xmax, draw_ymax,
+                                         grid_color, grid_tag)
+
+            for k in range(start_k2, end_k2 + 1):
+                self.draw_iso_line_segment(slope2, k * scaled_cell_h,
+                                         draw_xmin, draw_ymin,
+                                         draw_xmax, draw_ymax,
+                                         grid_color, grid_tag)
+
+        # Ensure correct stacking order
+        if self.canvas.find_withtag(grid_tag):
+            if self.canvas.find_withtag("draggable"):
                 self.canvas.tag_lower(grid_tag, "draggable")
 
-        # Ensure border is below grid (if grid exists), otherwise below all
+        # Ensure border is below grid
         if self.canvas.find_withtag("canvas_border"):
             if self.canvas.find_withtag(grid_tag):
                 self.canvas.tag_lower("canvas_border", grid_tag)
             else:
                 self.canvas.tag_lower("canvas_border", "all")
-        # --- End stacking order ---
 
         logging.debug("Grid drawn and stacking order adjusted.") # Updated log message
     def draw_iso_line_segment(self, slope, intercept_c, xmin, ymin, xmax, ymax, color, tag):
@@ -632,6 +726,102 @@ class CanvasWindow(tk.Frame):
             
         except Exception as e:
             logging.error(f"Error in redraw_canvas: {e}", exc_info=True)
+
+    def update_canvas_bounds(self, width, height):
+        """Update the canvas scroll region with padding"""
+        padding = 100  # Padding around content area
+        self.canvas.configure(scrollregion=(-padding, -padding, width + padding, height + padding))
+        
+    def _enforce_bounds(self, item_id):
+        """Ensure the given item stays within canvas bounds"""
+        try:
+            # Get current scroll region
+            x1, y1, x2, y2 = self.canvas.bbox(item_id)
+            scroll_left, scroll_top, scroll_right, scroll_bottom = self.canvas.cget("scrollregion").split()
+            
+            # Convert to integers
+            scroll_left = int(float(scroll_left))
+            scroll_top = int(float(scroll_top))
+            scroll_right = int(float(scroll_right))
+            scroll_bottom = int(float(scroll_bottom))
+            
+            # Calculate adjustments needed
+            dx = dy = 0
+            if x1 < scroll_left:
+                dx = scroll_left - x1
+            elif x2 > scroll_right:
+                dx = scroll_right - x2
+                
+            if y1 < scroll_top:
+                dy = scroll_top - y1
+            elif y2 > scroll_bottom:
+                dy = scroll_bottom - y2
+                
+            # Move item if needed
+            if dx != 0 or dy != 0:
+                self.canvas.move(item_id, dx, dy)
+                
+        except Exception as e:
+            logging.error(f"Error enforcing bounds for item {item_id}: {str(e)}")
+
+    def handle_drag(self, event):
+        """Handle dragging of canvas items"""
+        try:
+            if not hasattr(self, 'drag_data'):
+                return
+
+            # Calculate distance moved
+            delta_x = event.x - self.drag_data["x"]
+            delta_y = event.y - self.drag_data["y"]
+            
+            if not delta_x and not delta_y:
+                return
+                
+            # Get current item position
+            item_id = self.drag_data["item"]
+            bbox = self.canvas.bbox(item_id)
+            if not bbox:
+                return
+                
+            # Check if new position would be in bounds
+            scroll_region = self.canvas.cget("scrollregion").split()
+            if len(scroll_region) != 4:
+                return
+                
+            scroll_left = int(float(scroll_region[0]))
+            scroll_top = int(float(scroll_region[1]))
+            scroll_right = int(float(scroll_region[2]))
+            scroll_bottom = int(float(scroll_region[3]))
+            
+            new_x1 = bbox[0] + delta_x
+            new_y1 = bbox[1] + delta_y
+            new_x2 = bbox[2] + delta_x
+            new_y2 = bbox[3] + delta_y
+            
+            # Add padding for bounds check
+            padding = 50
+            
+            if (new_x1 < scroll_left + padding or 
+                new_x2 > scroll_right - padding or
+                new_y1 < scroll_top + padding or
+                new_y2 > scroll_bottom - padding):
+                # Check if canvas needs resizing
+                self.check_canvas_size()
+            
+            # Move the item and any associated selection rectangle
+            self.canvas.move(item_id, delta_x, delta_y)
+            
+            if item_id in self.images:
+                sel_rect = self.selection_rectangles.get(item_id)
+                if sel_rect:
+                    self.canvas.move(sel_rect, delta_x, delta_y)
+            
+            # Update drag data position
+            self.drag_data["x"] = event.x
+            self.drag_data["y"] = event.y
+            
+        except Exception as e:
+            logging.error(f"Error handling drag: {str(e)}")
 
     def update_overlay_stacking(self):
         """Raise or lower the overlay image based on the checkbox state."""
@@ -1198,3 +1388,54 @@ class CanvasWindow(tk.Frame):
         # Update layers window if it exists
         if hasattr(self.app, 'layers_window') and self.app.layers_window:
             self.app.layers_window.refresh_layers()
+
+    def check_canvas_size(self):
+        """Check if canvas needs resizing based on content"""
+        try:
+            # Get current content bounds
+            bounds = self.canvas.bbox("all")
+            if not bounds:
+                return
+                
+            x1, y1, x2, y2 = bounds
+            
+            # Get current scroll region
+            scroll_region = self.canvas.cget("scrollregion").split()
+            if len(scroll_region) != 4:
+                return
+                
+            scroll_left = int(float(scroll_region[0]))
+            scroll_top = int(float(scroll_region[1]))
+            scroll_right = int(float(scroll_region[2]))
+            scroll_bottom = int(float(scroll_region[3]))
+            
+            # Check if content exceeds current bounds
+            needs_update = False
+            new_width = scroll_right - scroll_left
+            new_height = scroll_bottom - scroll_top
+            
+            # Add padding for calculations
+            padding = 100
+            
+            if x1 < scroll_left + padding:
+                new_width += (scroll_left + padding - x1)
+                needs_update = True
+                
+            if x2 > scroll_right - padding:
+                new_width += (x2 - scroll_right + padding)
+                needs_update = True
+                
+            if y1 < scroll_top + padding:
+                new_height += (scroll_top + padding - y1)
+                needs_update = True
+                
+            if y2 > scroll_bottom - padding:
+                new_height += (y2 - scroll_bottom + padding)
+                needs_update = True
+                
+            # Update canvas size if needed
+            if needs_update:
+                self.update_canvas_bounds(new_width, new_height)
+                
+        except Exception as e:
+            logging.error(f"Error checking canvas size: {str(e)}")

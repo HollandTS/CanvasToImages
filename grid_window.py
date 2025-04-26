@@ -45,6 +45,7 @@ class GridWindow(tk.Frame):
         self.thumbnail_size = tk.IntVar(value=90)
         self.drag_data = {"filepath": None, "widget": None, "x":0, "y":0, "toplevel":None}
         self.fixed_columns = 4 # <<<--- SET FIXED NUMBER OF COLUMNS
+        self._mouse_press_data = {"pressed": False, "dragged": False, "filepath": None, "index": None, "widget": None}
 
         try:
             self._setup_ui()
@@ -181,12 +182,7 @@ class GridWindow(tk.Frame):
 
                 # Bind events
                 for widget in [item_frame, img_label, name_label]:
-                    widget.bind("<Button-1>", lambda e, p=filepath, i=idx: self._handle_item_click(e, p, i))
-                    if sys.platform == "darwin": widget.bind("<Command-Button-1>", lambda e, p=filepath: self._handle_toggle_click(e, p))
-                    else: widget.bind("<Control-Button-1>", lambda e, p=filepath: self._handle_toggle_click(e, p))
-                    widget.bind("<Shift-Button-1>", lambda e, i=idx: self._handle_shift_click(e, i))
-                    widget.bind("<B1-Motion>", lambda e, p=filepath, w=item_frame: self._handle_item_drag(e, p, w))
-                    widget.bind("<ButtonRelease-1>", lambda e: self._handle_item_release(e))
+                    self._bind_item_events(widget, filepath, idx, item_frame)
 
                 # *** Use grid() layout manager ***
                 item_frame.grid(row=row, column=col, padx=padding, pady=padding, sticky="nw")
@@ -222,13 +218,103 @@ class GridWindow(tk.Frame):
         logging.debug(f"Thumbnail size changed to: {self.thumbnail_size.get()}")
         self._redisplay_images()
 
-    def _handle_item_click(self, event, filepath, index):
-        """Handle plain click (Selects item, deselects others). Sets anchor."""
-        logging.debug(f"Item clicked: {os.path.basename(filepath)} at index {index}")
-        self.selected_paths.clear(); self.selected_paths.add(filepath)
-        self.last_selected_anchor_path = filepath
-        self._update_all_item_visuals()
-        self.drag_data = {"filepath": filepath, "widget": event.widget, "x": event.x_root, "y": event.y_root, "toplevel": None}
+    def _handle_item_press(self, event, filepath, idx, widget):
+        self._mouse_press_data = {"pressed": True, "dragged": False, "filepath": filepath, "index": idx, "widget": widget}
+        self.drag_data = {"filepath": filepath, "widget": widget, "x": event.x_root, "y": event.y_root, "toplevel": None}
+
+    def _handle_item_drag(self, event, filepath, item_frame):
+        if self._mouse_press_data["pressed"] and not self._mouse_press_data["dragged"]:
+            if abs(event.x_root - self.drag_data["x"]) > 5 or abs(event.y_root - self.drag_data["y"]) > 5:
+                self._mouse_press_data["dragged"] = True
+        # Only start drag if the item is selected (otherwise, user may want to select a new item)
+        if self.drag_data["filepath"] == filepath:
+            if not self.drag_data["toplevel"]:
+                # Create Toplevel only if mouse moved enough
+                if abs(event.x_root - self.drag_data["x"]) > 5 or abs(event.y_root - self.drag_data["y"]) > 5:
+                    logging.debug(f"Drag Start: Creating Toplevel for {len(self.selected_paths)} image(s)")
+                    try:
+                        if not self.app or not self.app.root or not self.app.root.winfo_exists():
+                            logging.error("Drag Start failed: Root missing."); return
+                        # Destroy any previous drag toplevels
+                        self.drag_data["toplevel"] = []
+                        offset = 0
+                        for sel_filepath in self.selected_paths:
+                            toplevel = tk.Toplevel(self.app.root)
+                            toplevel.overrideredirect(True)
+                            toplevel.attributes("-topmost", True)
+                            drag_image = self.images_data[sel_filepath].get('thumb_photo')
+                            if drag_image:
+                                Label(toplevel, image=drag_image, relief="solid", bd=1).pack()
+                            else:
+                                Label(toplevel, text="?", relief="solid", bd=1, bg="yellow").pack()
+                            # Stagger the previews for visibility
+                            toplevel.geometry(f"+{event.x_root + 5 + offset}+{event.y_root + 5 + offset}")
+                            self.drag_data["toplevel"].append(toplevel)
+                            offset += 20  # Stagger each preview
+                    except Exception as e:
+                        logging.error(f"Error creating drag toplevel: {e}", exc_info=True)
+                        if self.drag_data["toplevel"]:
+                            for t in self.drag_data["toplevel"]:
+                                try: t.destroy()
+                                except: pass
+                        self.drag_data["toplevel"] = None
+            elif self.drag_data["toplevel"]:
+                try:  # Update position of all previews
+                    for idx, toplevel in enumerate(self.drag_data["toplevel"]):
+                        if toplevel.winfo_exists():
+                            toplevel.geometry(f"+{event.x_root + 5 + idx*20}+{event.y_root + 5 + idx*20}")
+                except tk.TclError:
+                    self.drag_data["toplevel"] = None
+
+    def _handle_item_release(self, event, filepath, idx):
+        if self._mouse_press_data["pressed"] and not self._mouse_press_data["dragged"]:
+            # Treat as click (select)
+            self.selected_paths.clear(); self.selected_paths.add(filepath)
+            self.last_selected_anchor_path = filepath
+            self._update_all_item_visuals()
+        toplevel_window = self.drag_data.get("toplevel")
+        dragged_filepath = self.drag_data.get("filepath")
+        self.drag_data = {"filepath": None, "widget": None, "x":0, "y":0, "toplevel":None} # Reset
+        self._mouse_press_data = {"pressed": False, "dragged": False, "filepath": None, "index": None, "widget": None}
+        if toplevel_window:
+            logging.debug("Drag End: Releasing item")
+            try:
+                if isinstance(toplevel_window, list):
+                    for t in toplevel_window:
+                        if t.winfo_exists(): t.destroy()
+                elif toplevel_window.winfo_exists():
+                    toplevel_window.destroy()
+            except tk.TclError: pass
+            if self.app.canvas_window:
+                try:
+                    if self.app.canvas_window.is_above_canvas(event):
+                        selected_paths = list(self.selected_paths)
+                        n = len(selected_paths)
+                        if n == 0:
+                            return
+                        import math
+                        grid_cols = math.ceil(math.sqrt(n))
+                        spacing = 32  # You can adjust this spacing as needed
+                        canvas_widget = self.app.canvas_window.canvas
+                        x0 = event.x_root - canvas_widget.winfo_rootx()
+                        y0 = event.y_root - canvas_widget.winfo_rooty()
+                        for idx, sel_filepath in enumerate(selected_paths):
+                            pil_image = self.images_data[sel_filepath].get('pil_image')
+                            if pil_image:
+                                row = idx // grid_cols
+                                col = idx % grid_cols
+                                x = x0 + col * spacing
+                                y = y0 + row * spacing
+                                self.app.canvas_window.add_image(pil_image, sel_filepath, x, y)
+                                if hasattr(self.app, 'add_to_filelist'):
+                                    self.app.add_to_filelist(sel_filepath)
+                                logging.info(f"Item '{os.path.basename(sel_filepath)}' dropped on canvas.")
+                            else:
+                                logging.error(f"Cannot drop: PIL image missing for {sel_filepath}")
+                    else:
+                        logging.debug("Item released outside main canvas.")
+                except Exception as e:
+                    logging.error(f"Error processing drop: {e}", exc_info=True)
 
     def _handle_toggle_click(self, event, filepath):
         """Handle Ctrl/Cmd click (Toggles selection). Updates anchor."""
@@ -243,7 +329,7 @@ class GridWindow(tk.Frame):
         """Handle Shift click (Selects range)."""
         logging.debug(f"Shift click: index {clicked_index}")
         if self.last_selected_anchor_path is None or self.last_selected_anchor_path not in self.images_data:
-            self._handle_item_click(event, self.sorted_paths[clicked_index], clicked_index); return
+            self._handle_item_press(event, self.sorted_paths[clicked_index], clicked_index, event.widget); return
         try:
             anchor_index = self.sorted_paths.index(self.last_selected_anchor_path)
             start = min(anchor_index, clicked_index); end = max(anchor_index, clicked_index)
@@ -252,7 +338,7 @@ class GridWindow(tk.Frame):
             self._update_all_item_visuals()
         except (ValueError, IndexError) as e:
             logging.warning(f"Shift-click error ({e}). Treating as normal click.")
-            self._handle_item_click(event, self.sorted_paths[clicked_index], clicked_index)
+            self._handle_item_press(event, self.sorted_paths[clicked_index], clicked_index, event.widget)
         self.drag_data["filepath"] = None # Prevent drag start
 
     def _update_item_visual(self, item_frame, is_selected):
@@ -282,53 +368,15 @@ class GridWindow(tk.Frame):
             self._redisplay_images()
 
     # --- Drag and Drop ---
-    def _handle_item_drag(self, event, filepath, item_frame):
-         """Initiate or update drag operation."""
-         if self.drag_data["filepath"] == filepath:
-            if not self.drag_data["toplevel"]:
-                # Create Toplevel only if mouse moved enough
-                if abs(event.x_root - self.drag_data["x"]) > 5 or abs(event.y_root - self.drag_data["y"]) > 5:
-                    logging.debug(f"Drag Start: Creating Toplevel for {os.path.basename(filepath)}")
-                    try:
-                        if not self.app or not self.app.root or not self.app.root.winfo_exists(): logging.error("Drag Start failed: Root missing."); return
-                        self.drag_data["toplevel"] = tk.Toplevel(self.app.root)
-                        self.drag_data["toplevel"].overrideredirect(True); self.drag_data["toplevel"].attributes("-topmost", True)
-                        drag_image = self.images_data[filepath].get('thumb_photo')
-                        if drag_image: Label(self.drag_data["toplevel"], image=drag_image, relief="solid", bd=1).pack()
-                        else: Label(self.drag_data["toplevel"], text="?", relief="solid", bd=1, bg="yellow").pack()
-                        self.drag_data["toplevel"].geometry(f"+{event.x_root + 5}+{event.y_root + 5}")
-                    except Exception as e:
-                        logging.error(f"Error creating drag toplevel: {e}", exc_info=True)
-                        if self.drag_data["toplevel"]: self.drag_data["toplevel"].destroy()
-                        self.drag_data["toplevel"] = None
-            elif self.drag_data["toplevel"]:
-                 try: # Update position
-                      if self.drag_data["toplevel"].winfo_exists(): self.drag_data["toplevel"].geometry(f"+{event.x_root + 5}+{event.y_root + 5}")
-                 except tk.TclError: self.drag_data["toplevel"] = None
-
-    def _handle_item_release(self, event):
-        """Handle releasing the dragged item."""
-        toplevel_window = self.drag_data.get("toplevel")
-        dragged_filepath = self.drag_data.get("filepath")
-        self.drag_data = {"filepath": None, "widget": None, "x":0, "y":0, "toplevel":None} # Reset
-        if toplevel_window:
-             logging.debug("Drag End: Releasing item")
-             try:
-                 if toplevel_window.winfo_exists(): toplevel_window.destroy()
-             except tk.TclError: pass
-             if dragged_filepath and self.app.canvas_window:
-                 try:
-                     if self.app.canvas_window.is_above_canvas(event):
-                         logging.info(f"Item '{os.path.basename(dragged_filepath)}' dropped on canvas.")
-                         pil_image = self.images_data[dragged_filepath].get('pil_image')
-                         if pil_image:
-                             canvas_widget = self.app.canvas_window.canvas
-                             canvas_x = event.x_root - canvas_widget.winfo_rootx(); canvas_y = event.y_root - canvas_widget.winfo_rooty()
-                             self.app.canvas_window.add_image(pil_image, dragged_filepath, canvas_x, canvas_y)
-                             if hasattr(self.app, 'add_to_filelist'): self.app.add_to_filelist(dragged_filepath)
-                         else: logging.error(f"Cannot drop: PIL image missing for {dragged_filepath}")
-                     else: logging.debug("Item released outside main canvas.")
-                 except Exception as e: logging.error(f"Error processing drop: {e}", exc_info=True)
+    def _bind_item_events(self, widget, filepath, idx, item_frame):
+        widget.bind("<ButtonPress-1>", lambda e, p=filepath, i=idx, w=item_frame: self._handle_item_press(e, p, i, w))
+        widget.bind("<ButtonRelease-1>", lambda e, p=filepath, i=idx: self._handle_item_release(e, p, i))
+        widget.bind("<B1-Motion>", lambda e, p=filepath, w=item_frame: self._handle_item_drag(e, p, w))
+        if sys.platform == "darwin":
+            widget.bind("<Command-Button-1>", lambda e, p=filepath: self._handle_toggle_click(e, p))
+        else:
+            widget.bind("<Control-Button-1>", lambda e, p=filepath: self._handle_toggle_click(e, p))
+        widget.bind("<Shift-Button-1>", lambda e, i=idx: self._handle_shift_click(e, i))
 
     # --- Public Access ---
     def get_image_paths(self):
