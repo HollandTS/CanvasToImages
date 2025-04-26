@@ -64,5 +64,5 @@ Note: With snap enabled, you can loose the manual alignments (Arrow buttons). Ma
 
 ### File manager:
 Simply press Load images to load images
-use Ctrl and shift to select multiple images to delete. Drag images onto canvas.
+use Ctrl and shift to select multiple images. Drag images onto canvas.
 
